@@ -6,7 +6,7 @@ The domain is a fuel upload row classifier. Each implementation is isolated in i
 
 ## V2 Idiomatic Evolution Experiment
 
-V2 keeps the V1 implementations as the baseline, then tests how safely the strongest target languages evolve under change. Phase 0 scaffolding is captured in the [V2 experiment plan](docs/v2-experiment-plan.md), [V2 scoring rubric](docs/v2-scoring-rubric.md), and [V2 agent log](docs/v2-agent-log.md). Final target-language scoring is in the [V2 cross-language results](docs/v2-results.md).
+V2 keeps the V1 implementations as the baseline, then tests how safely the strongest target languages evolve under change. Phase 0 scaffolding is captured in the [V2 experiment plan](docs/v2-experiment-plan.md), [V2 scoring rubric](docs/v2-scoring-rubric.md), and [V2 agent log](docs/v2-agent-log.md). Final target-language scoring is in the [V2 cross-language results](docs/v2-results.md), and the exact subagent prompts are captured in the [V2 prompt logs](prompts/v2/README.md).
 
 ## Original Goal
 
