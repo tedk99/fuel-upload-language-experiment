@@ -18,7 +18,7 @@ off.
 Three folders. Models hold data. Services hold logic. Dtos hold the
 boundary shapes.
 
-```mermaid
+```{mermaid}
 flowchart TB
   subgraph Models["Models — data, all mutable"]
     FR[FuelRow]
@@ -303,7 +303,7 @@ The switch statement is C# 1.0 syntax. It's everywhere.
 
 Here is the same orchestrator, drawn as a data flow:
 
-```mermaid
+```{mermaid}
 flowchart LR
   Req[FuelUploadRequestDto] --> Loop[loop over Rows]
   Loop --> PR[ParsedFuelRow + Vehicle + DuplicateStatus]
@@ -327,7 +327,7 @@ arrow.**
 Now annotate that same diagram with the places where the code does
 something the type system can't see:
 
-```mermaid
+```{mermaid}
 flowchart LR
   Req[FuelUploadRequestDto] -->|Mode is a string| Loop[loop over Rows]
   Loop --> PR[Input row]

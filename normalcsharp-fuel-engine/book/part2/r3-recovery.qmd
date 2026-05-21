@@ -17,7 +17,7 @@ The aggressive case is the subtle one. It's the case the normal-C#
 engine **gets wrong**, and it's the case higher-rung languages can
 keep the compiler honest about.
 
-```mermaid
+```{mermaid}
 flowchart TD
     Start[Duplicate detected] --> M{Mode}
     M -- Normal --> Skip[Skip]

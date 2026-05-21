@@ -58,7 +58,7 @@ same one you saw in Haskell.
 
 Here is the `RowDecision` type in all four ladder languages.
 
-```mermaid
+```{mermaid}
 flowchart LR
   subgraph CS["C# (idiomatic)"]
     CS1["abstract record RowDecision<br/>sealed nested records<br/>switch expressions"]

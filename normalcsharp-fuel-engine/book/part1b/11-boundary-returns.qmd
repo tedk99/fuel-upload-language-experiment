@@ -51,7 +51,7 @@ concerns around the pure core:
 
 The full V3 pipeline looks like this:
 
-```mermaid
+```{mermaid}
 flowchart LR
     CSV[CSV rows: strings, nullable cells] --> ImportMapper[Import mapper]
     ImportMapper -->|valid| AppDto[Application DTO request]
@@ -91,7 +91,7 @@ changes the answer.
 
 The reason is intuitive once you look at it:
 
-```mermaid
+```{mermaid}
 flowchart TB
     subgraph Outside[The messy world]
         CSVcells[CSV cells: strings, nullable]

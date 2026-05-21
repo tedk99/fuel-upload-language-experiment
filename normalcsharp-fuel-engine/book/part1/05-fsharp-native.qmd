@@ -118,7 +118,7 @@ missing. We'll come back to the "missing" case in a minute.
 Six files, compiled in this order. F# has no forward references; the
 file order in the `.fsproj` is the dependency graph.
 
-```mermaid
+```{mermaid}
 flowchart TD
   P[Primitives.fs<br/>UploadMode DU<br/>FatalProcessingError DU]
   FR[FuelRow.fs<br/>ParsedFuelRow record]

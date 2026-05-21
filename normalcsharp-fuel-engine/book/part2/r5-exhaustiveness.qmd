@@ -12,7 +12,7 @@ asks for a new outcome:
 
 You add the case. What happens?
 
-```mermaid
+```{mermaid}
 stateDiagram-v2
     direction LR
     [*] --> Added: Add Throttled case

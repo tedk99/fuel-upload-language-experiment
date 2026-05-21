@@ -66,7 +66,7 @@ follow it — but if you write `panic!("bad row")` in Rust or
 
 ## The ladder, visualised
 
-```mermaid
+```{mermaid}
 flowchart TB
   Normal["Normal C#<br/>strings, mutable POCOs, exceptions"]
   Idiomatic["Idiomatic C#<br/>NRT, sealed records, switch expressions"]

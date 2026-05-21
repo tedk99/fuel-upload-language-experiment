@@ -19,7 +19,7 @@ algebraic shape but feels academic. Rust is disciplined but adds
 friction. The V2 ranking does not survive the boundary; the rest of
 this chapter shows you why.
 
-```mermaid
+```{mermaid}
 flowchart LR
     subgraph V2[V2: domain only]
         V2C[C#]
@@ -193,7 +193,7 @@ help if the numeric primitive is wrong.
 
 ### Side-by-side
 
-```mermaid
+```{mermaid}
 flowchart LR
     subgraph CS[C#]
         CSerr[FuelImportError record + enum code]
@@ -425,7 +425,7 @@ the boundary."
 
 ### Side-by-side
 
-```mermaid
+```{mermaid}
 flowchart TB
     subgraph CSpath[C# path]
         CS1[VehicleRepositoryResult.Success] --> CS2["DTO.VehicleLookupStatus = #quot;found#quot;"]
@@ -756,7 +756,7 @@ reorder is exactly the boundary pressure this chapter walked through.
 
 The narrative payoff:
 
-```mermaid
+```{mermaid}
 flowchart LR
     V2Winner[V2: Haskell wins on domain purity] -.boundary added.-> V3Winner[V3: F# wins on core+boundary]
     V2Winner -.boundary added.-> V3Reality[Haskell drops to reference-only]

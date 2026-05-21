@@ -14,7 +14,7 @@ test suite and thinking "all good" is half of the problem.
 
 Here is the map. We're going one by one.
 
-```mermaid
+```{mermaid}
 flowchart TB
   subgraph BugMap["Where the seven footguns hide"]
     direction TB
@@ -275,7 +275,7 @@ removing the drift between the row outcomes and the summary entirely.
 The bugs above aren't independent. They reinforce each other. Here's
 one specific chain that hits production:
 
-```mermaid
+```{mermaid}
 flowchart LR
   A["Client sends 'retry'<br/>(footgun 2)"] --> B["DuplicatePolicy<br/>returns false, reason 'UnknownMode'"]
   B --> C["RowDecision.Status<br/>= 'Skipped' (footgun 5)"]

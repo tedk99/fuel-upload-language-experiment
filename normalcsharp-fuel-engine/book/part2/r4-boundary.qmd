@@ -16,7 +16,7 @@ returns](../part1b/11-boundary-returns.qmd), where the V3 of the book
 explicitly adds CSV import and repository ports to push the boundary
 work harder.
 
-```mermaid
+```{mermaid}
 flowchart LR
     Wire["JSON / CSV (strings, nulls)"] --> Parse[Mapper]
     Parse -- errors --> WireErr[Validation errors back to caller]

@@ -204,7 +204,7 @@ vehicle is missing, the classifier sees `VehicleLookupResult::NotFound
 
 Even in the engines that "have no null," there's a boundary story.
 
-```mermaid
+```{mermaid}
 flowchart TB
     subgraph normal["normal C#"]
         n1[everywhere]

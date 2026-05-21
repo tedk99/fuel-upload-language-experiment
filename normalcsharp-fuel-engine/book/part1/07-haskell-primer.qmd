@@ -268,7 +268,7 @@ shorter syntax and free `Eq`/`Ord`/`Show`.
 
 ## The module layout
 
-```mermaid
+```{mermaid}
 flowchart TB
   subgraph Boundary["FuelUpload.Api — DTO &lt;-&gt; domain"]
     Api[Api.hs]

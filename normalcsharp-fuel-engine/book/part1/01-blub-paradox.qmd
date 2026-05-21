@@ -58,7 +58,7 @@ check the vehicle exists → check for duplicates → apply a recovery policy
 row → summarise the batch. The pipeline shape is the same in all five
 implementations:
 
-```mermaid
+```{mermaid}
 flowchart LR
     Parse --> Validate --> Vehicle[Vehicle lookup] --> Duplicate[Duplicate check]
     Duplicate --> Decide{Decide}

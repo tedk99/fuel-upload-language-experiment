@@ -308,7 +308,7 @@ property. The test is the rule's executable statement.
 
 ## What the type system covers vs. what the tests cover
 
-```mermaid
+```{mermaid}
 flowchart LR
   subgraph CS["Normal C#"]
     CST["Types: ~10%"]
@@ -395,7 +395,7 @@ itself isn't compile-checked against the constructors (there's no
 than a build break. Catching it is part of the "extend the generator
 when you extend the type" discipline.
 
-```mermaid
+```{mermaid}
 flowchart LR
   ADD[Add DeferredForManualReview case]
   ADD --> BUILD["cabal build with -Werror"]

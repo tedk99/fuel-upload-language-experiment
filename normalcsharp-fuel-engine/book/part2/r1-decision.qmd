@@ -158,7 +158,7 @@ moving them around — especially across a borrow boundary into a DTO
 
 ## The ladder, summarised
 
-```mermaid
+```{mermaid}
 flowchart LR
     A[strings + nulls<br/>normal C#] --> B[sealed records<br/>idiomatic C#]
     B --> C[discriminated unions<br/>F#]
