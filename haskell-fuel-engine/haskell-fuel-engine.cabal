@@ -23,7 +23,16 @@ common warnings
 
 library
   import:           warnings
-  exposed-modules:  FuelUpload.Engine
+  exposed-modules:
+      FuelUpload.DecisionEngine
+      FuelUpload.Domain.Decision
+      FuelUpload.Domain.Duplicate
+      FuelUpload.Domain.Primitive
+      FuelUpload.Domain.Row
+      FuelUpload.Domain.Vehicle
+      FuelUpload.DuplicatePolicy
+      FuelUpload.Summary
+      FuelUpload.Validation
   hs-source-dirs:   src
   build-depends:
       base >=4.18 && <4.20
@@ -32,8 +41,9 @@ library
 test-suite fuel-engine-test
   import:           warnings
   type:             exitcode-stdio-1.0
-  main-is:          Spec.hs
+  main-is:          FuelUpload/DecisionEngineSpec.hs
   hs-source-dirs:   test
+  other-modules:    FuelUpload.Properties
   build-depends:
       base >=4.18 && <4.20
     , haskell-fuel-engine

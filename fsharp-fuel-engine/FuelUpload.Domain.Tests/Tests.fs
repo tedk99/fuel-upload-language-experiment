@@ -1,7 +1,7 @@
-module FuelUpload.Engine.Tests
+module FuelUpload.Domain.Tests
 
 open System
-open FuelUpload.Engine
+open FuelUpload.Domain
 open Xunit
 
 let processingDate = DateTimeOffset(2026, 05, 21, 12, 0, 0, TimeSpan.Zero)
@@ -260,10 +260,3 @@ let ``fatal row blocks entire batch`` () =
         Assert.Equal(1, summary.FatalErrorRows)
         Assert.Equal<FatalProcessingError list>([ fatal ], fatalErrors)
     | other -> failwith $"Expected blocked batch, got %A{other}"
-
-[<Fact>]
-let ``static facade is callable and delegates to pure classifier`` () =
-    let decision =
-        FuelUploadDecisionEngine.ClassifyRow(config, UploadMode.Normal, row 18, matched, noDuplicate)
-
-    Assert.Equal(18, (assertAccepted decision).SourceRowNumber)

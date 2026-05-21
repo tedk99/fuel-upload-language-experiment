@@ -17,7 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\FuelUpload.Engine\FuelUpload.Engine.fsproj" />
+    <ProjectReference Include="..\FuelUpload.Domain\FuelUpload.Domain.fsproj" />
   </ItemGroup>
 
 </Project>
