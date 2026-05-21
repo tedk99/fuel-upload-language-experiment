@@ -397,6 +397,107 @@ let ``fatal row blocks entire batch`` () =
         Assert.Equal<FatalProcessingError list>([ fatal ], fatalErrors)
     | other -> failwith $"Expected blocked batch, got %A{other}"
 
+[<Fact>]
+let ``accepted row projects accepted audit event`` () =
+    let batch = DecisionEngine.classifyBatch config UploadMode.Normal [ context 31 matched noDuplicate ]
+    let audit = AuditProjection.project batch
+
+    Assert.Single audit |> ignore
+    Assert.Equal(AuditEventKind.Accepted, audit[0].Kind)
+    Assert.Equal("accepted", (AuditProjection.toDto audit[0]).Status)
+
+[<Fact>]
+let ``warning row projects accepted with warnings audit event`` () =
+    let warningConfig = { config with MaxTotalCost = 1000m }
+
+    let warningContext =
+        { Row =
+            { row 32 with
+                FuelVolumeGallons = 70m
+                TotalCost = 700m }
+          VehicleLookup = matched
+          DuplicateCheck = noDuplicate }
+
+    let audit = DecisionEngine.classifyBatch warningConfig UploadMode.Normal [ warningContext ] |> AuditProjection.project
+
+    Assert.Equal(AuditEventKind.AcceptedWithWarnings, audit[0].Kind)
+    Assert.NotEmpty audit[0].Warnings
+    Assert.Empty audit[0].QuarantineReasons
+
+[<Fact>]
+let ``rejected row projects rejected audit event`` () =
+    let rejectedContext = { (context 33 matched noDuplicate) with Row = { row 33 with MerchantName = "" } }
+    let audit = DecisionEngine.classifyBatch config UploadMode.Normal [ rejectedContext ] |> AuditProjection.project
+
+    Assert.Equal(AuditEventKind.Rejected, audit[0].Kind)
+    Assert.NotEmpty audit[0].RejectionReasons
+
+[<Fact>]
+let ``skipped duplicate projects skipped audit event`` () =
+    let duplicateContext =
+        context 34 matched (DuplicateCheckResult.Duplicate PreviousAttemptState.Finalized)
+
+    let audit = DecisionEngine.classifyBatch config UploadMode.Normal [ duplicateContext ] |> AuditProjection.project
+
+    Assert.Equal(AuditEventKind.SkippedDuplicate, audit[0].Kind)
+    Assert.Equal(Some DuplicateSkipReason.NormalModeDuplicate, audit[0].DuplicateSkipReason)
+
+[<Fact>]
+let ``quarantined row projects quarantined audit event with reasons`` () =
+    let quarantinedContext =
+        { (context 35 matched noDuplicate) with
+            Row = { row 35 with MerchantName = "Manual fuel entry" } }
+    let audit = DecisionEngine.classifyBatch config UploadMode.Normal [ quarantinedContext ] |> AuditProjection.project
+
+    Assert.Equal(AuditEventKind.Quarantined, audit[0].Kind)
+    Assert.Contains(QuarantineReason.SuspiciousMerchantName, audit[0].QuarantineReasons)
+
+[<Fact>]
+let ``fatal batch projects fatal audit event`` () =
+    let fatal = FatalProcessingError.DuplicateCheckUnavailable "duplicate store timed out"
+    let audit =
+        DecisionEngine.classifyBatch
+            config
+            UploadMode.Normal
+            [ context 36 matched (DuplicateCheckResult.Fatal fatal) ]
+        |> AuditProjection.project
+
+    Assert.Equal(AuditEventKind.FatalBatch, audit[0].Kind)
+    Assert.Equal(Some fatal, audit[0].FatalError)
+    Assert.Equal("fatal_batch", (AuditProjection.toDto audit[0]).Status)
+
+[<Fact>]
+let ``audit projection does not recompute classification`` () =
+    let impossibleAccepted =
+        { Row = { row 37 with FuelVolumeGallons = 0m }
+          Decision =
+            RowDecision.Accepted
+                { TransactionId = "txn-impossible"
+                  SourceRowNumber = 37
+                  Vehicle = vehicle
+                  OccurredAt = processingDate
+                  OdometerMiles = 10m
+                  FuelVolumeGallons = 0m
+                  TotalCost = 20m
+                  MerchantName = "Depot"
+                  ExternalReference = "ext-impossible"
+                  Mode = UploadMode.Normal } }
+
+    let summary =
+        { TotalRows = 99
+          AcceptedRows = 0
+          AcceptedWithWarningRows = 0
+          WarningCount = 0
+          QuarantinedRows = 0
+          SkippedDuplicateRows = 0
+          RejectedRows = 99
+          FatalErrorRows = 0 }
+
+    let audit = AuditProjection.project (BatchDecision.Ready([ impossibleAccepted ], summary))
+
+    Assert.Equal(AuditEventKind.Accepted, audit[0].Kind)
+    Assert.Equal(Some "txn-impossible", audit[0].TransactionId)
+
 let validDtoRow number : FuelUploadRowDto =
     { RowNumber = number
       VehicleKey = $"truck-{number}"

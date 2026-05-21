@@ -2,6 +2,7 @@ module Main (main) where
 
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified FuelUpload.Api as Api
+import FuelUpload.Audit
 import FuelUpload.DecisionEngine
 import FuelUpload.Domain.Decision
 import FuelUpload.Domain.Duplicate
@@ -241,6 +242,72 @@ main =
         batchOutcome batch `shouldBe` BatchUploadable
         summaryAcceptedWithWarnings (batchSummary batch) `shouldBe` 1
 
+    describe "audit projection" do
+      it "accepted row projects accepted audit event" do
+        let audit = projectAudit (classifyBatch defaultConfig Normal [validUniqueContext])
+        fmap auditKind audit `shouldBe` [AuditAccepted]
+        fmap (auditDtoStatus . toAuditRecordDto) audit `shouldBe` ["accepted"]
+
+      it "warning row projects accepted-with-warnings audit event" do
+        let row = validRow {parsedQuantity = FuelQuantity 75}
+            audit = onlyAudit (projectAudit (classifyBatch defaultConfig Normal [uniqueContext row]))
+        auditKind audit `shouldBe` AuditAcceptedWithWarnings
+        auditWarnings audit `shouldBe` [QuantityAboveWarningThreshold (FuelQuantity 75) (FuelQuantity 60)]
+        auditQuarantineReasons audit `shouldBe` []
+
+      it "rejected row projects rejected audit event" do
+        let row = validRow {parsedQuantity = FuelQuantity 0}
+            audit = onlyAudit (projectAudit (classifyBatch defaultConfig Normal [uniqueContext row]))
+        auditKind audit `shouldBe` AuditRejected
+        auditRejectionReason audit
+          `shouldBe` Just (RowFailedValidation (QuantityMustBePositive (FuelQuantity 0) :| []))
+
+      it "skipped duplicate projects skipped audit event" do
+        let audit = onlyAudit (projectAudit (classifyBatch defaultConfig Normal [duplicateContext finalizedAttempt]))
+        auditKind audit `shouldBe` AuditSkippedDuplicate
+        auditDuplicateSkipReason audit `shouldBe` Just (AlreadyFinalized (TransactionId "previous"))
+
+      it "quarantined row projects quarantined audit event with reasons" do
+        let row = validRow {parsedMerchantName = "Manual fuel entry"}
+            audit = onlyAudit (projectAudit (classifyBatch defaultConfig Normal [uniqueContext row]))
+        auditKind audit `shouldBe` AuditQuarantined
+        auditQuarantineReasons audit `shouldBe` [SuspiciousMerchantName]
+        auditWarnings audit `shouldBe` []
+
+      it "fatal batch projects fatal audit event" do
+        let fatalError = DuplicateCheckUnavailable (RowNumber 41)
+            rowContext =
+              RowContext
+                { contextRow = validRow {parsedRowNumber = RowNumber 41, parsedExternalRowId = ExternalRowId "row-41"}
+                , contextVehicleLookup = VehicleFound validVehicle
+                , contextDuplicateCheck = DuplicateCheckFatal fatalError
+                }
+            audit = onlyAudit (projectAudit (classifyBatch defaultConfig Normal [rowContext]))
+        auditKind audit `shouldBe` AuditFatalBatch
+        auditFatalError audit `shouldBe` Just fatalError
+        auditDtoStatus (toAuditRecordDto audit) `shouldBe` "fatal_batch"
+
+      it "audit projection does not recompute classification" do
+        let transaction = validTransaction {transactionId = TransactionId "txn-impossible"}
+            batch =
+              BatchDecision
+                { batchRows = [Accepted transaction]
+                , batchSummary =
+                    BatchSummary
+                      { summaryAccepted = 0
+                      , summaryAcceptedWithWarnings = 0
+                      , summaryQuarantined = 0
+                      , summarySkippedDuplicates = 0
+                      , summaryRejected = 99
+                      , summaryFatal = 0
+                      , summaryTotalRows = 99
+                      }
+                , batchOutcome = BatchUploadable
+                }
+            audit = onlyAudit (projectAudit batch)
+        auditKind audit `shouldBe` AuditAccepted
+        auditTransactionId audit `shouldBe` Just (TransactionId "txn-impossible")
+
     describe "DTO API boundary" do
       it "maps and classifies a valid DTO request" do
         Api.classifyUploadDto validDtoRequest
@@ -439,6 +506,10 @@ validVehicle =
 validTransaction :: FuelTransaction
 validTransaction =
   validTransactionFor validRow
+
+onlyAudit :: [AuditRecord] -> AuditRecord
+onlyAudit [audit] = audit
+onlyAudit audit = error ("expected one audit record, got " <> show (length audit))
 
 validTransactionFor :: ParsedFuelRow -> FuelTransaction
 validTransactionFor row =

@@ -13,6 +13,7 @@
     <Compile Include="Validation.fs" />
     <Compile Include="Decision.fs" />
     <Compile Include="BatchSummary.fs" />
+    <Compile Include="Audit.fs" />
     <Compile Include="DecisionEngine.fs" />
     <Compile Include="Interop.fs" />
   </ItemGroup>

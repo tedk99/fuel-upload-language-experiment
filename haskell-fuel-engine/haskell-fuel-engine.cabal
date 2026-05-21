@@ -24,6 +24,7 @@ common warnings
 library
   import:           warnings
   exposed-modules:
+      FuelUpload.Audit
       FuelUpload.Api
       FuelUpload.DecisionEngine
       FuelUpload.Domain.Decision
