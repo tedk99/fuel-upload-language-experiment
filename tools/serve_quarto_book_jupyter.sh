@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Render the checked-in book reader and serve the repo through JupyterLab.
-# The served default URL is the static book page, so readers do not need Quarto
-# or language kernels installed.
+# Serve the book as JupyterLab notebooks.
+#
+# Each chapter .qmd is converted to a real .ipynb under docs/book-notebooks/
+# (prose -> markdown cells, code -> language-tagged code cells, mermaid -> inline
+# pre-rendered SVG). JupyterLab opens the notebook tree, so readers get
+# cell-by-cell navigation instead of a wall of static HTML.
+#
+# No language kernels are wired up — code cells are intentionally read-only
+# studyware. The pre-rendered SVG diagrams come from Quarto's HTML build, which
+# this script will trigger if Quarto is on PATH and the notebooks need refresh.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_DIR="${JUPYTER_BOOK_VENV:-$ROOT/.venv-jupyter-book}"
-HOST="${HOST:-127.0.0.1}"
+HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8888}"
 OPEN_BROWSER="${OPEN_BROWSER:-0}"
+SKIP_BUILD="${SKIP_BUILD:-0}"
 
 usage() {
   cat <<EOF
@@ -18,13 +26,14 @@ Usage: $(basename "$0") [options]
 Options:
   --host HOST       Bind address for JupyterLab. Default: $HOST
   --port PORT       Port for JupyterLab. Default: $PORT
-  --static          Accepted for compatibility; the static reader is always rendered
+  --skip-build      Skip the notebook rebuild step; serve whatever is checked in
   --open-browser    Let Jupyter try to open a browser
   -h, --help        Show this help
 
 Environment:
   JUPYTER_BOOK_VENV=...   Override the local Jupyter venv path
   OPEN_BROWSER=0          Set to 1 to let Jupyter open a browser
+  SKIP_BUILD=0            Set to 1 to skip the notebook rebuild
 EOF
 }
 
@@ -42,7 +51,13 @@ while [[ $# -gt 0 ]]; do
       PORT="${2:?missing port}"
       shift 2
       ;;
+    --skip-build)
+      SKIP_BUILD=1
+      shift
+      ;;
     --static)
+      # Legacy flag from the old static-HTML serve script. Accepted for
+      # compatibility (docker-compose passes it) but is now a no-op.
       shift
       ;;
     --open-browser)
@@ -71,11 +86,16 @@ if ! "$VENV_DIR/bin/python" -m jupyter lab --version >/dev/null 2>&1; then
   "$VENV_DIR/bin/python" -m pip install jupyterlab
 fi
 
-log "Rendering dependency-free static reader."
-python3 "$ROOT/tools/render_static_book.py"
+if [[ "$SKIP_BUILD" != "1" ]]; then
+  log "Building chapter notebooks (with pre-rendered SVG diagrams)."
+  python3 "$ROOT/tools/build_book_notebooks.py"
+else
+  log "SKIP_BUILD=1 — serving the checked-in notebooks as-is."
+fi
 
-if [[ ! -f "$ROOT/docs/book/index.html" ]]; then
-  printf '[book-jupyter] ERROR: docs/book/index.html was not created\n' >&2
+INDEX="$ROOT/docs/book-notebooks/index.ipynb"
+if [[ ! -f "$INDEX" ]]; then
+  printf '[book-jupyter] ERROR: %s does not exist; run tools/build_book_notebooks.py\n' "$INDEX" >&2
   exit 1
 fi
 
@@ -84,10 +104,10 @@ if [[ "$OPEN_BROWSER" == "1" ]]; then
   BROWSER_FLAG=()
 fi
 
-log "Serving docs/book/index.html through JupyterLab."
+log "Serving JupyterLab; landing on docs/book-notebooks/index.ipynb"
 exec "$VENV_DIR/bin/python" -m jupyter lab \
   --ServerApp.root_dir="$ROOT" \
-  --ServerApp.default_url="/files/docs/book/index.html" \
+  --ServerApp.default_url="/lab/tree/docs/book-notebooks/index.ipynb" \
   --ip="$HOST" \
   --port="$PORT" \
   --allow-root \

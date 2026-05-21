@@ -6,6 +6,10 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+AZURE_JUPYTER_REPO = os.environ.get(
+    "PROGRAMMING_BITES_AZURE_REPO",
+    "/Users/ted/Develop/work-fieldale/programming_bites",
+)
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -107,8 +111,8 @@ def cmd_book_docker_logs():
     run("docker compose -f docker-compose.book.yml logs -f --tail=200")
 
 def cmd_book_deploy():
-    heading("Deploy Jupyter container and static book")
-    must("bash scripts/deploy_book_server.sh")
+    heading("Deploy Azure Jupyter container and static book")
+    must(f"cd {AZURE_JUPYTER_REPO} && ./okgo deploy")
 
 # ── Docs / experiment ────────────────────────────────────────────────────
 

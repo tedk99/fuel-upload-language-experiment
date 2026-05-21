@@ -8,12 +8,22 @@ The domain is a fuel upload row classifier. Each implementation is isolated in i
 
 A 20-chapter teaching book walks junior C# developers up the language ladder using these engines as the worked example.
 
-To read it without installing anything, open the static reader at [`docs/book/index.html`](docs/book/index.html). It is generated from the Quarto sources and is intended for checked-in, browser-only reading.
+There are two checked-in ways to read it without installing Quarto:
 
-Source lives under [`book/`](book/). To refresh the static reader after editing the book:
+- **Static reader** — `docs/book/index.html`. Hand-rolled HTML, mermaid as source. Fine for skim/search.
+- **JupyterLab notebooks** — `docs/book-notebooks/index.ipynb`. Each chapter is split into prose markdown cells and language-tagged code cells, with mermaid diagrams **pre-rendered to inline SVG**. Open in JupyterLab for cell-by-cell navigation.
+
+Source lives under [`book/`](book/). To refresh after editing the book:
 
 ```bash
-python3 tools/render_static_book.py
+python3 tools/render_static_book.py        # static HTML reader
+python3 tools/build_book_notebooks.py      # notebooks (requires Quarto for SVG rendering)
+```
+
+To serve the notebook view locally:
+
+```bash
+bash tools/serve_quarto_book_jupyter.sh    # rebuilds notebooks, starts JupyterLab on :8888
 ```
 
 To publish the Jupyter container and a public static copy of the book on the
@@ -25,9 +35,8 @@ Ubuntu/Docker host:
 
 That deploys the repo contents into the JupyterLab container, so any checked-in
 notebooks and source files are available there, and also starts a public static
-reader on port `8898` so everyone gets a browser-only copy of the book. Jupyter
-is bound to localhost on the server at port `8899`; use an SSH tunnel when you
-need it.
+reader on port `8898`. Jupyter is bound to localhost on the server at port
+`8899`; use an SSH tunnel when you need it.
 
 If you do have Quarto installed, you can still use the richer Quarto preview/render flow:
 
