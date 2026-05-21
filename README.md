@@ -4,6 +4,10 @@ This repository compares how well different languages help an LLM produce correc
 
 The domain is a fuel upload row classifier. Each implementation is isolated in its own folder and does not integrate with any application, database, CSV parser, UI, or FleetSoft code.
 
+## V2 Idiomatic Evolution Experiment
+
+V2 keeps the V1 implementations as the baseline, then tests how safely the strongest target languages evolve under change. Phase 0 scaffolding is captured in the [V2 experiment plan](docs/v2-experiment-plan.md), [V2 scoring rubric](docs/v2-scoring-rubric.md), and [V2 agent log](docs/v2-agent-log.md).
+
 ## Original Goal
 
 Implement the same pure decision engine across multiple languages:
@@ -118,4 +122,3 @@ Verified local tools:
 - Haskell Language Server `2.13.0.0`
 - Rust `1.95.0`
 - cargo `1.95.0`
-
