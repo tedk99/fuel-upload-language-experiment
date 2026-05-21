@@ -6,7 +6,8 @@ open System
 type UploadMode =
     | Normal
     | Retry
-    | Recovery
+    | ConservativeRecovery
+    | AggressiveRecovery
 
 [<RequireQualifiedAccess>]
 type FatalProcessingError =

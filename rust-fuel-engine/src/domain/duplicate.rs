@@ -17,6 +17,7 @@ pub enum DuplicateState {
         attempt_id: AttemptId,
         retry: RetryEligibility,
         finalization: FinalizationState,
+        canonical_transaction: CanonicalTransactionKey,
     },
 }
 
@@ -31,4 +32,10 @@ pub enum FinalizationState {
     FailedBeforeCanonicalFinalization,
     FailedAfterCanonicalFinalization,
     Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CanonicalTransactionKey {
+    Present(TransactionId),
+    Missing,
 }

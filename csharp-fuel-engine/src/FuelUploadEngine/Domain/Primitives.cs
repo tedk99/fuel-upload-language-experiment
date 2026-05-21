@@ -14,7 +14,8 @@ public enum UploadMode
 {
     Normal,
     Retry,
-    Recovery
+    ConservativeRecovery,
+    AggressiveRecovery
 }
 
 public enum ValidationErrorCode

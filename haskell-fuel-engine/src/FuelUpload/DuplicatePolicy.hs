@@ -24,11 +24,19 @@ duplicateDecision Retry (DuplicateOf previousAttempt)
       UploadDuplicate
   | otherwise =
       SkipDuplicate (skipReasonForPreviousAttempt previousAttempt)
-duplicateDecision Recovery (DuplicateOf previousAttempt)
+duplicateDecision ConservativeRecovery (DuplicateOf previousAttempt)
   | previousCanonicalizationState previousAttempt == FailedBeforeCanonicalization =
       UploadDuplicate
   | otherwise =
-      RejectDuplicate (skipReasonForPreviousAttempt previousAttempt)
+      SkipDuplicate (skipReasonForPreviousAttempt previousAttempt)
+duplicateDecision AggressiveRecovery (DuplicateOf previousAttempt)
+  | previousCanonicalizationState previousAttempt == FailedBeforeCanonicalization =
+      UploadDuplicate
+  | previousCanonicalizationState previousAttempt == CanonicalizedWithoutTransactionKey
+      && previousFinalizationState previousAttempt /= Finalized =
+      UploadDuplicate
+  | otherwise =
+      SkipDuplicate (skipReasonForPreviousAttempt previousAttempt)
 
 skipReasonForPreviousAttempt :: PreviousAttempt -> DuplicateSkipReason
 skipReasonForPreviousAttempt previousAttempt =

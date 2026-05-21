@@ -26,7 +26,8 @@ data PreviousAttempt = PreviousAttempt
   deriving stock (Eq, Show)
 
 data CanonicalizationState
-  = Canonicalized
+  = CanonicalizedWithTransactionKey TransactionId
+  | CanonicalizedWithoutTransactionKey
   | FailedBeforeCanonicalization
   deriving stock (Eq, Show)
 

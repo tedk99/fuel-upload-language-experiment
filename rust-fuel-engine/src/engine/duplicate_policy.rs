@@ -28,13 +28,31 @@ pub(crate) fn duplicate_gate(
             DuplicateGate::Skip(skipped_duplicate(row, state, mode))
         }
         (
-            UploadMode::Recovery,
+            UploadMode::ConservativeRecovery,
             DuplicateCheckResult::Duplicate(DuplicateState::PreviousAttempt {
                 finalization: FinalizationState::FailedBeforeCanonicalFinalization,
                 ..
             }),
         ) => DuplicateGate::Continue,
-        (UploadMode::Recovery, DuplicateCheckResult::Duplicate(state)) => {
+        (UploadMode::ConservativeRecovery, DuplicateCheckResult::Duplicate(state)) => {
+            DuplicateGate::Skip(skipped_duplicate(row, state, mode))
+        }
+        (
+            UploadMode::AggressiveRecovery,
+            DuplicateCheckResult::Duplicate(DuplicateState::PreviousAttempt {
+                finalization: FinalizationState::FailedBeforeCanonicalFinalization,
+                ..
+            }),
+        ) => DuplicateGate::Continue,
+        (
+            UploadMode::AggressiveRecovery,
+            DuplicateCheckResult::Duplicate(DuplicateState::PreviousAttempt {
+                finalization: FinalizationState::FailedAfterCanonicalFinalization,
+                canonical_transaction: CanonicalTransactionKey::Missing,
+                ..
+            }),
+        ) => DuplicateGate::Continue,
+        (UploadMode::AggressiveRecovery, DuplicateCheckResult::Duplicate(state)) => {
             DuplicateGate::Skip(skipped_duplicate(row, state, mode))
         }
     }

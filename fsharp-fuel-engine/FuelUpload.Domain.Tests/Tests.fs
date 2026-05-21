@@ -105,7 +105,9 @@ let ``normal mode skips every duplicate`` () =
         [ PreviousAttemptState.Finalized
           PreviousAttemptState.RetryableFailure
           PreviousAttemptState.NonRetryableFailure
-          PreviousAttemptState.FailedBeforeCanonicalFinalization ]
+          PreviousAttemptState.FailedBeforeCanonicalFinalization
+          PreviousAttemptState.FailedAfterCanonicalizationWithCanonicalTransactionKey
+          PreviousAttemptState.FailedAfterCanonicalizationWithoutCanonicalTransactionKey ]
 
     for state in states do
         let decision = classify UploadMode.Normal (row 4) matched (DuplicateCheckResult.Duplicate state)
@@ -155,23 +157,30 @@ let ``retry mode accepts only explicitly retryable duplicates`` () =
     | other -> failwith $"Expected retry non-retryable duplicate skip, got %A{other}"
 
 [<Fact>]
-let ``recovery mode accepts only duplicates failed before canonical finalization`` () =
+let ``conservative recovery preserves old recovery behavior`` () =
     let recoverable =
         classify
-            UploadMode.Recovery
+            UploadMode.ConservativeRecovery
             (row 8)
             matched
             (DuplicateCheckResult.Duplicate PreviousAttemptState.FailedBeforeCanonicalFinalization)
 
-    Assert.Equal(UploadMode.Recovery, (assertAccepted recoverable).Mode)
+    Assert.Equal(UploadMode.ConservativeRecovery, (assertAccepted recoverable).Mode)
 
     let canonicalizedStates =
         [ PreviousAttemptState.Finalized
           PreviousAttemptState.RetryableFailure
-          PreviousAttemptState.NonRetryableFailure ]
+          PreviousAttemptState.NonRetryableFailure
+          PreviousAttemptState.FailedAfterCanonicalizationWithCanonicalTransactionKey
+          PreviousAttemptState.FailedAfterCanonicalizationWithoutCanonicalTransactionKey ]
 
     for state in canonicalizedStates do
-        let decision = classify UploadMode.Recovery (row 9) matched (DuplicateCheckResult.Duplicate state)
+        let decision =
+            classify
+                UploadMode.ConservativeRecovery
+                (row 9)
+                matched
+                (DuplicateCheckResult.Duplicate state)
 
         match decision with
         | RowDecision.SkippedDuplicate skipped ->
@@ -180,6 +189,51 @@ let ``recovery mode accepts only duplicates failed before canonical finalization
                 skipped.Reason
             )
         | other -> failwith $"Expected recovery duplicate skip for %A{state}, got %A{other}"
+
+[<Fact>]
+let ``aggressive recovery accepts failed after canonicalization only without canonical transaction key`` () =
+    let accepted =
+        classify
+            UploadMode.AggressiveRecovery
+            (row 24)
+            matched
+            (DuplicateCheckResult.Duplicate PreviousAttemptState.FailedAfterCanonicalizationWithoutCanonicalTransactionKey)
+
+    Assert.Equal(UploadMode.AggressiveRecovery, (assertAccepted accepted).Mode)
+
+    let skipped =
+        classify
+            UploadMode.AggressiveRecovery
+            (row 25)
+            matched
+            (DuplicateCheckResult.Duplicate PreviousAttemptState.FailedAfterCanonicalizationWithCanonicalTransactionKey)
+
+    match skipped with
+    | RowDecision.SkippedDuplicate skipped ->
+        Assert.Equal(
+            DuplicateSkipReason.RecoveryModeDuplicateAlreadyCanonicalized
+                PreviousAttemptState.FailedAfterCanonicalizationWithCanonicalTransactionKey,
+            skipped.Reason
+        )
+    | other -> failwith $"Expected aggressive recovery duplicate skip, got %A{other}"
+
+[<Fact>]
+let ``recovery modes still quarantine accepted suspicious duplicates`` () =
+    let cases =
+        [ UploadMode.ConservativeRecovery, PreviousAttemptState.FailedBeforeCanonicalFinalization
+          UploadMode.AggressiveRecovery, PreviousAttemptState.FailedAfterCanonicalizationWithoutCanonicalTransactionKey ]
+
+    for mode, state in cases do
+        let decision =
+            classify
+                mode
+                { row 26 with MerchantName = "manual review" }
+                matched
+                (DuplicateCheckResult.Duplicate state)
+
+        match decision with
+        | RowDecision.Quarantined _ -> ()
+        | other -> failwith $"Expected quarantined recovery duplicate, got %A{other}"
 
 [<Fact>]
 let ``warnings are returned with accepted transactions and do not block upload`` () =

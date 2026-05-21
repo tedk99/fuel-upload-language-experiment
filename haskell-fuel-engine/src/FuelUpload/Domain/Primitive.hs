@@ -39,7 +39,8 @@ newtype TransactionId = TransactionId String
 data UploadMode
   = Normal
   | Retry
-  | Recovery
+  | ConservativeRecovery
+  | AggressiveRecovery
   deriving stock (Eq, Show)
 
 data ValidationConfig = ValidationConfig

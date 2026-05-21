@@ -6,6 +6,8 @@ type PreviousAttemptState =
     | RetryableFailure
     | NonRetryableFailure
     | FailedBeforeCanonicalFinalization
+    | FailedAfterCanonicalizationWithCanonicalTransactionKey
+    | FailedAfterCanonicalizationWithoutCanonicalTransactionKey
 
 [<RequireQualifiedAccess>]
 type DuplicateCheckResult =

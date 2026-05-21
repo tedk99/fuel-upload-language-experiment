@@ -35,5 +35,6 @@ pub enum Merchant {
 pub enum UploadMode {
     Normal,
     Retry,
-    Recovery,
+    ConservativeRecovery,
+    AggressiveRecovery,
 }

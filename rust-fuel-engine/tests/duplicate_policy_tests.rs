@@ -60,7 +60,7 @@ fn duplicate_retry_is_accepted_when_previous_attempt_explicitly_retryable() {
 }
 
 #[test]
-fn duplicate_recovery_is_accepted_only_before_canonical_finalization() {
+fn duplicate_conservative_recovery_preserves_old_recovery_behavior() {
     let accepted = classify_row(
         &row_input(
             valid_row(),
@@ -70,7 +70,7 @@ fn duplicate_recovery_is_accepted_only_before_canonical_finalization() {
                 FinalizationState::FailedBeforeCanonicalFinalization,
             ),
         ),
-        UploadMode::Recovery,
+        UploadMode::ConservativeRecovery,
         &quiet_config(),
     );
     let skipped = classify_row(
@@ -82,18 +82,83 @@ fn duplicate_recovery_is_accepted_only_before_canonical_finalization() {
                 FinalizationState::FailedAfterCanonicalFinalization,
             ),
         ),
-        UploadMode::Recovery,
+        UploadMode::ConservativeRecovery,
         &quiet_config(),
     );
     let finalized = classify_row(
         &row_input(valid_row(), found_vehicle(), finalized_duplicate()),
-        UploadMode::Recovery,
+        UploadMode::ConservativeRecovery,
         &quiet_config(),
     );
 
     assert!(matches!(accepted, RowDecision::Accepted(_)));
     assert!(matches!(skipped, RowDecision::SkippedDuplicate(_)));
     assert!(matches!(finalized, RowDecision::SkippedDuplicate(_)));
+}
+
+#[test]
+fn duplicate_aggressive_recovery_accepts_failed_after_canonicalization_only_without_key() {
+    let accepted = classify_row(
+        &row_input(
+            valid_row(),
+            found_vehicle(),
+            previous_attempt_without_canonical_key(
+                RetryEligibility::ExplicitlyRetryable,
+                FinalizationState::FailedAfterCanonicalFinalization,
+            ),
+        ),
+        UploadMode::AggressiveRecovery,
+        &quiet_config(),
+    );
+    let skipped = classify_row(
+        &row_input(
+            valid_row(),
+            found_vehicle(),
+            previous_attempt(
+                RetryEligibility::ExplicitlyRetryable,
+                FinalizationState::FailedAfterCanonicalFinalization,
+            ),
+        ),
+        UploadMode::AggressiveRecovery,
+        &quiet_config(),
+    );
+
+    assert!(matches!(accepted, RowDecision::Accepted(_)));
+    assert!(matches!(skipped, RowDecision::SkippedDuplicate(_)));
+}
+
+#[test]
+fn recovery_modes_still_quarantine_accepted_suspicious_duplicates() {
+    let mut suspicious = valid_row();
+    suspicious.merchant = Merchant::Known("manual review".to_string());
+
+    let conservative = classify_row(
+        &row_input(
+            suspicious.clone(),
+            found_vehicle(),
+            previous_attempt(
+                RetryEligibility::NotRetryable,
+                FinalizationState::FailedBeforeCanonicalFinalization,
+            ),
+        ),
+        UploadMode::ConservativeRecovery,
+        &quiet_config(),
+    );
+    let aggressive = classify_row(
+        &row_input(
+            suspicious,
+            found_vehicle(),
+            previous_attempt_without_canonical_key(
+                RetryEligibility::ExplicitlyRetryable,
+                FinalizationState::FailedAfterCanonicalFinalization,
+            ),
+        ),
+        UploadMode::AggressiveRecovery,
+        &quiet_config(),
+    );
+
+    assert!(matches!(conservative, RowDecision::Quarantined { .. }));
+    assert!(matches!(aggressive, RowDecision::Quarantined { .. }));
 }
 
 fn valid_row() -> ParsedFuelRow {
@@ -151,5 +216,18 @@ fn previous_attempt(
         attempt_id: AttemptId("attempt-1".to_string()),
         retry,
         finalization,
+        canonical_transaction: CanonicalTransactionKey::Present(TransactionId("txn-1".to_string())),
+    })
+}
+
+fn previous_attempt_without_canonical_key(
+    retry: RetryEligibility,
+    finalization: FinalizationState,
+) -> DuplicateCheckResult {
+    DuplicateCheckResult::Duplicate(DuplicateState::PreviousAttempt {
+        attempt_id: AttemptId("attempt-1".to_string()),
+        retry,
+        finalization,
+        canonical_transaction: CanonicalTransactionKey::Missing,
     })
 }

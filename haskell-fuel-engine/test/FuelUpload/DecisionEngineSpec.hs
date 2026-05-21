@@ -150,20 +150,40 @@ main =
         classifyRow defaultConfig Retry (duplicateContext retryableAttempt)
           `shouldBe` Accepted validTransaction
 
-      it "accepts Recovery duplicates only before canonical finalization" do
-        classifyRow defaultConfig Recovery (duplicateContext preCanonicalAttempt)
+      it "accepts ConservativeRecovery duplicates only before canonical finalization" do
+        classifyRow defaultConfig ConservativeRecovery (duplicateContext preCanonicalAttempt)
           `shouldBe` Accepted validTransaction
 
-      it "rejects Recovery duplicates after canonicalization with a typed reason" do
-        classifyRow defaultConfig Recovery (duplicateContext retryableAttempt)
-          `shouldBe` Rejected
-            RejectedRow
-              { rejectedRow = validRow
-              , rejectionReason =
-                  DuplicateCannotBeUploaded
-                    Recovery
-                    (PreviousAttemptCanonicalized (TransactionId "previous"))
+      it "skips ConservativeRecovery duplicates after canonicalization" do
+        classifyRow defaultConfig ConservativeRecovery (duplicateContext retryableAttempt)
+          `shouldBe` SkippedDuplicate
+            SkippedDuplicateInfo
+              { skippedRow = validRow
+              , duplicateSkipReason = PreviousAttemptCanonicalized (TransactionId "previous")
               }
+
+      it "accepts AggressiveRecovery failed-after-canonicalization duplicates only without a canonical transaction key" do
+        classifyRow defaultConfig AggressiveRecovery (duplicateContext retryableAttemptWithoutCanonicalKey)
+          `shouldBe` Accepted validTransaction
+
+        classifyRow defaultConfig AggressiveRecovery (duplicateContext retryableAttempt)
+          `shouldBe` SkippedDuplicate
+            SkippedDuplicateInfo
+              { skippedRow = validRow
+              , duplicateSkipReason = PreviousAttemptCanonicalized (TransactionId "previous")
+              }
+
+      it "quarantines suspicious duplicates accepted by recovery modes" do
+        let row = validRow {parsedMerchantName = "manual review"}
+            transaction = validTransactionFor row
+            conservativeContext =
+              (duplicateContext preCanonicalAttempt) {contextRow = row}
+            aggressiveContext =
+              (duplicateContext retryableAttemptWithoutCanonicalKey) {contextRow = row}
+        classifyRow defaultConfig ConservativeRecovery conservativeContext
+          `shouldBe` Quarantined transaction (SuspiciousMerchantName :| [])
+        classifyRow defaultConfig AggressiveRecovery aggressiveContext
+          `shouldBe` Quarantined transaction (SuspiciousMerchantName :| [])
 
     describe "classifyBatch" do
       it "derives summary counts from per-row decisions" do
@@ -296,7 +316,7 @@ finalizedAttempt :: PreviousAttempt
 finalizedAttempt =
   PreviousAttempt
     { previousTransactionId = TransactionId "previous"
-    , previousCanonicalizationState = Canonicalized
+    , previousCanonicalizationState = CanonicalizedWithTransactionKey (TransactionId "previous")
     , previousFinalizationState = Finalized
     }
 
@@ -304,7 +324,15 @@ retryableAttempt :: PreviousAttempt
 retryableAttempt =
   PreviousAttempt
     { previousTransactionId = TransactionId "previous"
-    , previousCanonicalizationState = Canonicalized
+    , previousCanonicalizationState = CanonicalizedWithTransactionKey (TransactionId "previous")
+    , previousFinalizationState = FailedRetryable
+    }
+
+retryableAttemptWithoutCanonicalKey :: PreviousAttempt
+retryableAttemptWithoutCanonicalKey =
+  PreviousAttempt
+    { previousTransactionId = TransactionId "previous"
+    , previousCanonicalizationState = CanonicalizedWithoutTransactionKey
     , previousFinalizationState = FailedRetryable
     }
 
@@ -312,7 +340,7 @@ notRetryableAttempt :: PreviousAttempt
 notRetryableAttempt =
   PreviousAttempt
     { previousTransactionId = TransactionId "previous"
-    , previousCanonicalizationState = Canonicalized
+    , previousCanonicalizationState = CanonicalizedWithTransactionKey (TransactionId "previous")
     , previousFinalizationState = FailedNotRetryable
     }
 

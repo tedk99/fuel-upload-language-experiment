@@ -20,8 +20,16 @@ public static class DuplicatePolicy
                 row.RowNumber,
                 duplicate,
                 DuplicateSkipCode.PreviousAttemptNotRetryable),
-            UploadMode.Recovery when duplicate.PreviousOutcome is PreviousUploadOutcome.FailedBeforeCanonicalFinalization => null,
-            UploadMode.Recovery => new RowDecision.SkippedDuplicate(
+            UploadMode.ConservativeRecovery when duplicate.PreviousOutcome is PreviousUploadOutcome.FailedBeforeCanonicalFinalization => null,
+            UploadMode.ConservativeRecovery => new RowDecision.SkippedDuplicate(
+                row.RowNumber,
+                duplicate,
+                DuplicateSkipCode.PreviousAttemptAlreadyCanonicalized),
+            UploadMode.AggressiveRecovery when duplicate.PreviousOutcome is PreviousUploadOutcome.FailedBeforeCanonicalFinalization => null,
+            UploadMode.AggressiveRecovery
+                when duplicate.PreviousOutcome is PreviousUploadOutcome.FailedAfterCanonicalFinalization
+                    && duplicate.CanonicalTransactionKey is CanonicalTransactionKeyState.Missing => null,
+            UploadMode.AggressiveRecovery => new RowDecision.SkippedDuplicate(
                 row.RowNumber,
                 duplicate,
                 DuplicateSkipCode.PreviousAttemptAlreadyCanonicalized),

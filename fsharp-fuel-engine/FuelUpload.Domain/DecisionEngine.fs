@@ -78,10 +78,18 @@ module DecisionEngine =
                         skipped row mode PreviousAttemptState.Finalized DuplicateSkipReason.RetryModeDuplicateAlreadyFinalized
                     | UploadMode.Retry, DuplicateCheckResult.Duplicate previous ->
                         skipped row mode previous (DuplicateSkipReason.RetryModeDuplicateNotRetryable previous)
-                    | UploadMode.Recovery,
+                    | UploadMode.ConservativeRecovery,
                       DuplicateCheckResult.Duplicate PreviousAttemptState.FailedBeforeCanonicalFinalization ->
                         accepted config mode row vehicle
-                    | UploadMode.Recovery, DuplicateCheckResult.Duplicate previous ->
+                    | UploadMode.ConservativeRecovery, DuplicateCheckResult.Duplicate previous ->
+                        skipped row mode previous (DuplicateSkipReason.RecoveryModeDuplicateAlreadyCanonicalized previous)
+                    | UploadMode.AggressiveRecovery,
+                      DuplicateCheckResult.Duplicate PreviousAttemptState.FailedBeforeCanonicalFinalization ->
+                        accepted config mode row vehicle
+                    | UploadMode.AggressiveRecovery,
+                      DuplicateCheckResult.Duplicate PreviousAttemptState.FailedAfterCanonicalizationWithoutCanonicalTransactionKey ->
+                        accepted config mode row vehicle
+                    | UploadMode.AggressiveRecovery, DuplicateCheckResult.Duplicate previous ->
                         skipped row mode previous (DuplicateSkipReason.RecoveryModeDuplicateAlreadyCanonicalized previous)
                     | _, DuplicateCheckResult.Fatal fatal -> RowDecision.Fatal fatal
                 | VehicleLookupResult.Fatal fatal -> RowDecision.Fatal fatal

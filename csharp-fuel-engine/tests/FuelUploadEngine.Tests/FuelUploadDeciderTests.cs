@@ -120,7 +120,7 @@ public sealed class FuelUploadDeciderTests
 
     [Theory]
     [MemberData(nameof(RecoveryDuplicateCases))]
-    public void ClassifyRow_recovery_accepts_only_failures_before_canonical_finalization(
+    public void ClassifyRow_conservative_recovery_preserves_old_recovery_behavior(
         PreviousUploadOutcome previousOutcome,
         bool shouldAccept)
     {
@@ -129,7 +129,7 @@ public sealed class FuelUploadDeciderTests
             FoundVehicle(),
             Duplicate(previousOutcome),
             StrictConfig,
-            UploadMode.Recovery);
+            UploadMode.ConservativeRecovery);
 
         if (shouldAccept)
         {
@@ -141,6 +141,67 @@ public sealed class FuelUploadDeciderTests
             var skipped = Assert.IsType<RowDecision.SkippedDuplicate>(decision);
             Assert.Equal(DuplicateSkipCode.PreviousAttemptAlreadyCanonicalized, skipped.Reason);
         }
+    }
+
+    [Fact]
+    public void ClassifyRow_conservative_recovery_skips_failed_after_canonicalization()
+    {
+        var decision = FuelUploadDecider.ClassifyRow(
+            ValidRow(),
+            FoundVehicle(),
+            Duplicate(new PreviousUploadOutcome.FailedAfterCanonicalFinalization()),
+            StrictConfig,
+            UploadMode.ConservativeRecovery);
+
+        var skipped = Assert.IsType<RowDecision.SkippedDuplicate>(decision);
+        Assert.Equal(DuplicateSkipCode.PreviousAttemptAlreadyCanonicalized, skipped.Reason);
+    }
+
+    [Fact]
+    public void ClassifyRow_aggressive_recovery_accepts_failed_after_canonicalization_without_canonical_key()
+    {
+        var decision = FuelUploadDecider.ClassifyRow(
+            ValidRow(),
+            FoundVehicle(),
+            DuplicateWithoutCanonicalTransactionKey(new PreviousUploadOutcome.FailedAfterCanonicalFinalization()),
+            StrictConfig,
+            UploadMode.AggressiveRecovery);
+
+        var accepted = Assert.IsType<RowDecision.AcceptedTransaction>(decision);
+        Assert.Equal(new TransactionKey("existing-key"), accepted.Transaction.Key);
+    }
+
+    [Fact]
+    public void ClassifyRow_aggressive_recovery_skips_failed_after_canonicalization_with_canonical_key()
+    {
+        var decision = FuelUploadDecider.ClassifyRow(
+            ValidRow(),
+            FoundVehicle(),
+            Duplicate(new PreviousUploadOutcome.FailedAfterCanonicalFinalization()),
+            StrictConfig,
+            UploadMode.AggressiveRecovery);
+
+        var skipped = Assert.IsType<RowDecision.SkippedDuplicate>(decision);
+        Assert.Equal(DuplicateSkipCode.PreviousAttemptAlreadyCanonicalized, skipped.Reason);
+    }
+
+    [Theory]
+    [InlineData(UploadMode.ConservativeRecovery)]
+    [InlineData(UploadMode.AggressiveRecovery)]
+    public void ClassifyRow_recovery_modes_quarantine_accepted_suspicious_duplicates(UploadMode mode)
+    {
+        var duplicate = mode == UploadMode.ConservativeRecovery
+            ? Duplicate(new PreviousUploadOutcome.FailedBeforeCanonicalFinalization())
+            : DuplicateWithoutCanonicalTransactionKey(new PreviousUploadOutcome.FailedAfterCanonicalFinalization());
+
+        var decision = FuelUploadDecider.ClassifyRow(
+            ValidRow(merchantName: "manual review"),
+            FoundVehicle(),
+            duplicate,
+            StrictConfig,
+            mode);
+
+        Assert.IsType<RowDecision.QuarantinedRow>(decision);
     }
 
     [Fact]
@@ -355,5 +416,13 @@ public sealed class FuelUploadDeciderTests
     private static DuplicateCheckResult Duplicate(PreviousUploadOutcome previousOutcome)
     {
         return new DuplicateCheckResult.Duplicate(new DuplicateState(new TransactionKey("existing-key"), previousOutcome));
+    }
+
+    private static DuplicateCheckResult DuplicateWithoutCanonicalTransactionKey(PreviousUploadOutcome previousOutcome)
+    {
+        return new DuplicateCheckResult.Duplicate(new DuplicateState(
+            new TransactionKey("existing-key"),
+            previousOutcome,
+            new CanonicalTransactionKeyState.Missing()));
     }
 }
