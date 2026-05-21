@@ -7,6 +7,8 @@ use super::vehicle::VehicleLookupResult;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FuelTransaction {
+    pub transaction_id: TransactionId,
+    pub row_number: RowNumber,
     pub source_id: SourceRowId,
     pub vehicle_id: VehicleId,
     pub occurred_on: FuelDate,

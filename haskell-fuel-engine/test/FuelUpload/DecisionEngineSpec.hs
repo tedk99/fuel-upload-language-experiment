@@ -1,7 +1,9 @@
 module Main (main) where
 
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.List (isInfixOf)
 import qualified FuelUpload.Api as Api
+import FuelUpload.Audit
 import FuelUpload.DecisionEngine
 import FuelUpload.Domain.Decision
 import FuelUpload.Domain.Duplicate
@@ -9,6 +11,7 @@ import FuelUpload.Domain.Primitive
 import FuelUpload.Domain.Row
 import FuelUpload.Domain.Vehicle
 import FuelUpload.Properties
+import FuelUpload.Report
 import Test.Hspec
 
 main :: IO ()
@@ -241,6 +244,162 @@ main =
         batchOutcome batch `shouldBe` BatchUploadable
         summaryAcceptedWithWarnings (batchSummary batch) `shouldBe` 1
 
+    describe "audit projection" do
+      it "accepted row projects accepted audit event" do
+        let audit = projectAudit (classifyBatch defaultConfig Normal [validUniqueContext])
+        fmap auditKind audit `shouldBe` [AuditAccepted]
+        fmap (auditDtoStatus . toAuditRecordDto) audit `shouldBe` ["accepted"]
+
+      it "warning row projects accepted-with-warnings audit event" do
+        let row = validRow {parsedQuantity = FuelQuantity 75}
+            audit = onlyAudit (projectAudit (classifyBatch defaultConfig Normal [uniqueContext row]))
+        auditKind audit `shouldBe` AuditAcceptedWithWarnings
+        auditWarnings audit `shouldBe` [QuantityAboveWarningThreshold (FuelQuantity 75) (FuelQuantity 60)]
+        auditQuarantineReasons audit `shouldBe` []
+
+      it "rejected row projects rejected audit event" do
+        let row = validRow {parsedQuantity = FuelQuantity 0}
+            audit = onlyAudit (projectAudit (classifyBatch defaultConfig Normal [uniqueContext row]))
+        auditKind audit `shouldBe` AuditRejected
+        auditRejectionReason audit
+          `shouldBe` Just (RowFailedValidation (QuantityMustBePositive (FuelQuantity 0) :| []))
+
+      it "skipped duplicate projects skipped audit event" do
+        let audit = onlyAudit (projectAudit (classifyBatch defaultConfig Normal [duplicateContext finalizedAttempt]))
+        auditKind audit `shouldBe` AuditSkippedDuplicate
+        auditDuplicateSkipReason audit `shouldBe` Just (AlreadyFinalized (TransactionId "previous"))
+
+      it "quarantined row projects quarantined audit event with reasons" do
+        let row = validRow {parsedMerchantName = "Manual fuel entry"}
+            audit = onlyAudit (projectAudit (classifyBatch defaultConfig Normal [uniqueContext row]))
+        auditKind audit `shouldBe` AuditQuarantined
+        auditQuarantineReasons audit `shouldBe` [SuspiciousMerchantName]
+        auditWarnings audit `shouldBe` []
+
+      it "fatal batch projects fatal audit event" do
+        let fatalError = DuplicateCheckUnavailable (RowNumber 41)
+            rowContext =
+              RowContext
+                { contextRow = validRow {parsedRowNumber = RowNumber 41, parsedExternalRowId = ExternalRowId "row-41"}
+                , contextVehicleLookup = VehicleFound validVehicle
+                , contextDuplicateCheck = DuplicateCheckFatal fatalError
+                }
+            audit = onlyAudit (projectAudit (classifyBatch defaultConfig Normal [rowContext]))
+        auditKind audit `shouldBe` AuditFatalBatch
+        auditFatalError audit `shouldBe` Just fatalError
+        auditDtoStatus (toAuditRecordDto audit) `shouldBe` "fatal_batch"
+
+      it "audit projection does not recompute classification" do
+        let transaction = validTransaction {transactionId = TransactionId "txn-impossible"}
+            batch =
+              BatchDecision
+                { batchRows = [Accepted transaction]
+                , batchSummary =
+                    BatchSummary
+                      { summaryAccepted = 0
+                      , summaryAcceptedWithWarnings = 0
+                      , summaryQuarantined = 0
+                      , summarySkippedDuplicates = 0
+                      , summaryRejected = 99
+                      , summaryFatal = 0
+                      , summaryTotalRows = 99
+                      }
+                , batchOutcome = BatchUploadable
+                }
+            audit = onlyAudit (projectAudit batch)
+        auditKind audit `shouldBe` AuditAccepted
+        auditTransactionId audit `shouldBe` Just (TransactionId "txn-impossible")
+
+    describe "operational report projection" do
+      it "includes decision-derived operational lists" do
+        let warningTransaction =
+              (validTransactionFor (validRow {parsedRowNumber = RowNumber 2, parsedExternalRowId = ExternalRowId "row-2"}))
+                {transactionId = TransactionId "txn-2"}
+            rejectedRowValue = validRow {parsedRowNumber = RowNumber 3, parsedExternalRowId = ExternalRowId "row-3", parsedQuantity = FuelQuantity 0}
+            skippedRowValue = validRow {parsedRowNumber = RowNumber 4, parsedExternalRowId = ExternalRowId "row-4"}
+            quarantineTransaction =
+              (validTransactionFor (validRow {parsedRowNumber = RowNumber 5, parsedExternalRowId = ExternalRowId "row-5"}))
+                {transactionId = TransactionId "txn-quarantine"}
+            decisions =
+              [ Accepted (validTransaction {transactionId = TransactionId "txn-1"})
+              , AcceptedWithWarnings warningTransaction (QuantityAboveWarningThreshold (FuelQuantity 75) (FuelQuantity 60) :| [])
+              , Rejected
+                  RejectedRow
+                    { rejectedRow = rejectedRowValue
+                    , rejectionReason = RowFailedValidation (QuantityMustBePositive (FuelQuantity 0) :| [])
+                    }
+              , SkippedDuplicate
+                  SkippedDuplicateInfo
+                    { skippedRow = skippedRowValue
+                    , duplicateSkipReason = AlreadyFinalized (TransactionId "previous")
+                    }
+              , Quarantined quarantineTransaction (SuspiciousMerchantName :| [])
+              ]
+            batch =
+              BatchDecision
+                { batchRows = decisions
+                , batchSummary = batchSummary (classifyBatch defaultConfig Normal [validUniqueContext])
+                , batchOutcome = BatchUploadable
+                }
+            report = projectOperationalReport batch
+        operationalStatus report `shouldBe` OperationalReady
+        operationalUploadedTransactionIds report `shouldBe` [TransactionId "txn-1", TransactionId "txn-2"]
+        operationalRejectedRowNumbers report `shouldBe` [RowNumber 3]
+        operationalSkippedDuplicateRowNumbers report `shouldBe` [RowNumber 4]
+        operationalQuarantinedRows report
+          `shouldBe` [ OperationalQuarantinedRow
+                         { operationalQuarantinedRowNumber = RowNumber 5
+                         , operationalQuarantineReasons = [SuspiciousMerchantName]
+                         }
+                     ]
+
+      it "fatal report has fatal status and no uploaded transactions" do
+        let fatalError = DuplicateCheckUnavailable (RowNumber 6)
+            decisions = [Accepted (validTransaction {transactionId = TransactionId "txn-blocked"}), Fatal fatalError]
+            summary =
+              BatchSummary
+                { summaryAccepted = 1
+                , summaryAcceptedWithWarnings = 0
+                , summaryQuarantined = 0
+                , summarySkippedDuplicates = 0
+                , summaryRejected = 0
+                , summaryFatal = 1
+                , summaryTotalRows = 2
+                }
+            batch =
+              BatchDecision
+                { batchRows = decisions
+                , batchSummary = summary
+                , batchOutcome = BatchBlockedByFatal (fatalError :| [])
+                }
+            report = projectOperationalReport batch
+        operationalStatus report `shouldBe` OperationalFatal
+        operationalUploadedTransactionIds report `shouldBe` []
+        operationalFatalErrors report `shouldBe` [fatalError]
+
+      it "uses existing summary and does not inspect raw input rows" do
+        let impossibleRow = validRow {parsedQuantity = FuelQuantity 0}
+            transaction = (validTransactionFor impossibleRow) {transactionId = TransactionId "txn-decision-only"}
+            summary =
+              BatchSummary
+                { summaryAccepted = 42
+                , summaryAcceptedWithWarnings = 5
+                , summaryQuarantined = 4
+                , summarySkippedDuplicates = 3
+                , summaryRejected = 2
+                , summaryFatal = 0
+                , summaryTotalRows = 99
+                }
+            batch =
+              BatchDecision
+                { batchRows = [Accepted transaction]
+                , batchSummary = summary
+                , batchOutcome = BatchUploadable
+                }
+            report = projectOperationalReport batch
+        operationalCounts report `shouldBe` summary
+        operationalUploadedTransactionIds report `shouldBe` [TransactionId "txn-decision-only"]
+
     describe "DTO API boundary" do
       it "maps and classifies a valid DTO request" do
         Api.classifyUploadDto validDtoRequest
@@ -333,6 +492,125 @@ main =
         Api.responseAccepted response `shouldBe` 42
         Api.responseQuarantined response `shouldBe` 4
 
+      it "repository vehicle match leads to normal classification" do
+        case Api.classifyUploadDtoWithRepositories (vehicleRepository (Right (VehicleFound validVehicle))) (duplicateRepository (Right (DuplicateCheckSucceeded UniqueRow))) repositoryDtoRequest of
+          Right response -> do
+            fmap Api.decisionOutcome (Api.responseDecisions response) `shouldBe` ["accepted"]
+            fmap Api.decisionVehicleId (Api.responseDecisions response) `shouldBe` [Just "vehicle-1"]
+          Left errors -> expectationFailure ("Expected repository DTO to classify, got " <> show errors)
+
+      it "repository missing vehicle uses existing not-found behavior" do
+        case Api.classifyUploadDtoWithRepositories (vehicleRepository (Right (VehicleMissing (Registration "AB12 CDE")))) (duplicateRepository (Right (DuplicateCheckSucceeded UniqueRow))) repositoryDtoRequest of
+          Right response -> do
+            fmap Api.decisionOutcome (Api.responseDecisions response) `shouldBe` ["rejected"]
+            Api.decisionRejectionReason (head (Api.responseDecisions response)) `shouldSatisfy` maybe False (containsText "VehicleWasNotFound")
+          Left errors -> expectationFailure ("Expected repository DTO to classify, got " <> show errors)
+
+      it "repository duplicate state leads to skipped duplicate" do
+        case Api.classifyUploadDtoWithRepositories (vehicleRepository (Right (VehicleFound validVehicle))) (duplicateRepository (Right (DuplicateCheckSucceeded (DuplicateOf finalizedAttempt)))) repositoryDtoRequest of
+          Right response -> do
+            fmap Api.decisionOutcome (Api.responseDecisions response) `shouldBe` ["skipped_duplicate"]
+            Api.responseSkippedDuplicates response `shouldBe` 1
+          Left errors -> expectationFailure ("Expected repository DTO to classify, got " <> show errors)
+
+      it "repository failure is typed and not a validation error" do
+        let repositoryError = Api.VehicleRepositoryTimedOut "vehicle store timed out"
+        case Api.classifyUploadDtoWithRepositories (vehicleRepository (Left repositoryError)) (duplicateRepository (Right (DuplicateCheckSucceeded UniqueRow))) repositoryDtoRequest of
+          Right response -> do
+            repositoryError `shouldBe` Api.VehicleRepositoryTimedOut "vehicle store timed out"
+            fmap Api.decisionOutcome (Api.responseDecisions response) `shouldBe` ["fatal"]
+            Api.decisionFatalError (head (Api.responseDecisions response)) `shouldSatisfy` maybe False (containsText "VehicleLookupUnavailable")
+            Api.decisionRejectionReason (head (Api.responseDecisions response)) `shouldBe` Nothing
+          Left errors -> expectationFailure ("Expected repository DTO to classify, got " <> show errors)
+
+      it "quarantine still works with repository-backed service" do
+        let request = repositoryDtoRequest {Api.dtoRows = [repositoryDtoRow {Api.dtoMerchantName = "Manual fuel entry"}]}
+        case Api.classifyUploadDtoWithRepositories (vehicleRepository (Right (VehicleFound validVehicle))) (duplicateRepository (Right (DuplicateCheckSucceeded UniqueRow))) request of
+          Right response -> do
+            fmap Api.decisionOutcome (Api.responseDecisions response) `shouldBe` ["quarantined"]
+            Api.responseQuarantined response `shouldBe` 1
+          Left errors -> expectationFailure ("Expected repository DTO to classify, got " <> show errors)
+
+      it "repository-backed service summary matches the DTO summary" do
+        let repositoryResponse = Api.classifyUploadDtoWithRepositories (vehicleRepository (Right (VehicleFound validVehicle))) (duplicateRepository (Right (DuplicateCheckSucceeded UniqueRow))) repositoryDtoRequest
+            dtoResponse = Api.classifyUploadDto validDtoRequest
+        case (repositoryResponse, dtoResponse) of
+          (Right repository, Right dto) -> do
+            Api.responseTotalRows repository `shouldBe` Api.responseTotalRows dto
+            Api.responseAccepted repository `shouldBe` Api.responseAccepted dto
+            Api.responseQuarantined repository `shouldBe` Api.responseQuarantined dto
+          other -> expectationFailure ("Expected both DTO paths to classify, got " <> show other)
+
+    describe "CSV-shaped import boundary" do
+      it "valid imported row maps and classifies" do
+        case Api.classifyImportBatch validImportRequest of
+          Right response -> do
+            Api.responseTotalRows response `shouldBe` 1
+            Api.responseAccepted response `shouldBe` 1
+            fmap Api.decisionOutcome (Api.responseDecisions response) `shouldBe` ["accepted"]
+          Left errors -> expectationFailure ("Expected import to classify, got " <> show errors)
+
+      it "missing required imported cell returns typed import error" do
+        let request =
+              validImportRequest
+                { Api.importRows =
+                    [ validRawRow {Api.importRegistration = " "} ]
+                }
+        Api.toFuelUploadRequestDto request
+          `shouldBe` Left
+            [ Api.FuelImportError
+                { Api.importErrorCode = Api.ImportMissingRequiredCell
+                , Api.importErrorField = "rows[0].registration"
+                , Api.importErrorDetail = "A non-empty cell is required."
+                }
+            ]
+
+      it "bad numeric imported value returns typed import error" do
+        let request =
+              validImportRequest
+                { Api.importRows =
+                    [ validRawRow {Api.importQuantity = "many"} ]
+                }
+        Api.toFuelUploadRequestDto request
+          `shouldBe` Left
+            [ Api.FuelImportError
+                { Api.importErrorCode = Api.ImportInvalidNumber
+                , Api.importErrorField = "rows[0].quantity"
+                , Api.importErrorDetail = "Cell must be a decimal number."
+                }
+            ]
+
+      it "unknown imported upload mode returns typed import error" do
+        let request = validImportRequest {Api.importUploadMode = "eventual"}
+        Api.toFuelUploadRequestDto request
+          `shouldBe` Left
+            [ Api.FuelImportError
+                { Api.importErrorCode = Api.ImportInvalidUploadMode
+                , Api.importErrorField = "uploadMode"
+                , Api.importErrorDetail = "Unsupported upload mode 'eventual'."
+                }
+            ]
+
+      it "quarantine still works through imported input" do
+        let request =
+              validImportRequest
+                { Api.importRows =
+                    [ validRawRow {Api.importMerchantName = "Manual fuel entry"} ]
+                }
+        case Api.classifyImportBatch request of
+          Right response -> do
+            Api.responseQuarantined response `shouldBe` 1
+            fmap Api.decisionOutcome (Api.responseDecisions response) `shouldBe` ["quarantined"]
+          Left errors -> expectationFailure ("Expected import to classify, got " <> show errors)
+
+      it "import mapper does not recompute summary independently" do
+        case Api.classifyImportBatch validImportRequest of
+          Right response -> do
+            Api.responseTotalRows response `shouldBe` 1
+            Api.responseAccepted response `shouldBe` 1
+            Api.responseQuarantined response `shouldBe` 0
+          Left errors -> expectationFailure ("Expected import to classify, got " <> show errors)
+
     propertySpec
 
 defaultConfig :: ValidationConfig
@@ -369,6 +647,10 @@ validVehicle =
 validTransaction :: FuelTransaction
 validTransaction =
   validTransactionFor validRow
+
+onlyAudit :: [AuditRecord] -> AuditRecord
+onlyAudit [audit] = audit
+onlyAudit audit = error ("expected one audit record, got " <> show (length audit))
 
 validTransactionFor :: ParsedFuelRow -> FuelTransaction
 validTransactionFor row =
@@ -459,6 +741,45 @@ validDtoRequest =
     , Api.dtoRows = [validDtoRow]
     }
 
+repositoryDtoRequest :: Api.FuelUploadRequestDto
+repositoryDtoRequest =
+  validDtoRequest {Api.dtoRows = [repositoryDtoRow]}
+
+validImportRequest :: Api.ImportBatchRequest
+validImportRequest =
+  Api.ImportBatchRequest
+    { Api.importUploadMode = "normal"
+    , Api.importMaximumQuantity = "100"
+    , Api.importMaximumAmount = "200"
+    , Api.importHighQuantityWarning = "60"
+    , Api.importHighAmountWarning = "100"
+    , Api.importHighOdometerWarning = "150000"
+    , Api.importSuspiciousQuantity = "33"
+    , Api.importSuspiciousAmount = "99"
+    , Api.importRows = [validRawRow]
+    }
+
+validRawRow :: Api.RawFuelUploadRow
+validRawRow =
+  Api.RawFuelUploadRow
+    { Api.importRowNumber = "1"
+    , Api.importTransactionDate = "2026-05-20"
+    , Api.importExternalRowId = "row-1"
+    , Api.importRegistration = "AB12 CDE"
+    , Api.importQuantity = "40"
+    , Api.importAmount = "80"
+    , Api.importOdometer = "42000"
+    , Api.importMerchantName = "Depot Fuel"
+    , Api.importVehicleLookupStatus = "found"
+    , Api.importVehicleId = "vehicle-1"
+    , Api.importVehicleLookupError = ""
+    , Api.importDuplicateStatus = "unique"
+    , Api.importPreviousTransactionId = ""
+    , Api.importCanonicalizationState = ""
+    , Api.importFinalizationState = ""
+    , Api.importDuplicateError = ""
+    }
+
 validDtoRow :: Api.FuelUploadRowDto
 validDtoRow =
   Api.FuelUploadRowDto
@@ -478,3 +799,25 @@ validDtoRow =
     , Api.dtoFinalizationState = ""
     , Api.dtoDuplicateError = ""
     }
+
+repositoryDtoRow :: Api.FuelUploadRowDto
+repositoryDtoRow =
+  validDtoRow
+    { Api.dtoVehicleLookupStatus = ""
+    , Api.dtoVehicleId = ""
+    , Api.dtoDuplicateStatus = ""
+    , Api.dtoPreviousTransactionId = ""
+    , Api.dtoCanonicalizationState = ""
+    , Api.dtoFinalizationState = ""
+    }
+
+vehicleRepository :: Either Api.VehicleRepositoryError VehicleLookupResult -> Api.VehicleRepository
+vehicleRepository result =
+  Api.VehicleRepository (\_ -> result)
+
+duplicateRepository :: Either Api.DuplicateRepositoryError DuplicateCheckResult -> Api.DuplicateRepository
+duplicateRepository result =
+  Api.DuplicateRepository (\_ -> result)
+
+containsText :: String -> String -> Bool
+containsText = isInfixOf

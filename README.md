@@ -8,6 +8,10 @@ The domain is a fuel upload row classifier. Each implementation is isolated in i
 
 V2 keeps the V1 implementations as the baseline, then tests how safely the strongest target languages evolve under change. Phase 0 scaffolding is captured in the [V2 experiment plan](docs/v2-experiment-plan.md), [V2 scoring rubric](docs/v2-scoring-rubric.md), and [V2 agent log](docs/v2-agent-log.md). Final target-language scoring is in the [V2 cross-language results](docs/v2-results.md), and the exact subagent prompts are captured in the [V2 prompt logs](prompts/v2/README.md).
 
+## V3 Integration Pressure Experiment
+
+V3 builds on V2 by testing how the strongest target languages hold their domain boundaries under integration-shaped pressure. Phase 0 scaffolding is captured in the [V3 experiment plan](docs/v3-experiment-plan.md), [V3 scoring rubric](docs/v3-scoring-rubric.md), and [V3 agent log](docs/v3-agent-log.md). Final target-language scoring is in the [V3 cross-language results](docs/v3-results.md). The team-facing F# follow-up is the [F# fuel upload learning guide](docs/fsharp-learning-guide.md).
+
 ## Original Goal
 
 Implement the same pure decision engine across multiple languages:

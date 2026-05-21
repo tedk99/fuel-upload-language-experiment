@@ -93,6 +93,104 @@ public sealed class FuelUploadApplicationBoundaryTests
         Assert.True(response.HasFatalErrors);
     }
 
+    [Fact]
+    public void Repository_vehicle_match_leads_to_normal_classification()
+    {
+        var result = RepositoryService(
+            new VehicleRepositoryResult.Success(new VehicleLookupResult.Found(
+                new Vehicle(new VehicleId("vehicle-1"), new VehicleIdentifier("REG-1")))),
+            new DuplicateRepositoryResult.Success(new DuplicateCheckResult.NotDuplicate(new TransactionKey("txn-1"))))
+            .Classify(RepositoryRequest());
+
+        var response = Assert.IsType<FuelUploadMapResult<FuelUploadResponseDto>.Success>(result).Value;
+        Assert.Equal("accepted", response.Decisions[0].Outcome);
+        Assert.Equal("vehicle-1", response.Decisions[0].VehicleId);
+    }
+
+    [Fact]
+    public void Repository_missing_vehicle_uses_existing_not_found_behavior()
+    {
+        var result = RepositoryService(
+            new VehicleRepositoryResult.Success(new VehicleLookupResult.NotFound(new VehicleIdentifier("REG-1"))),
+            new DuplicateRepositoryResult.Success(new DuplicateCheckResult.NotDuplicate(new TransactionKey("txn-1"))))
+            .Classify(RepositoryRequest());
+
+        var response = Assert.IsType<FuelUploadMapResult<FuelUploadResponseDto>.Success>(result).Value;
+        Assert.Equal("rejected", response.Decisions[0].Outcome);
+        Assert.Equal(nameof(RejectionCode.VehicleNotFound), response.Decisions[0].RejectionCode);
+    }
+
+    [Fact]
+    public void Repository_duplicate_state_leads_to_skipped_duplicate()
+    {
+        var result = RepositoryService(
+            new VehicleRepositoryResult.Success(new VehicleLookupResult.Found(
+                new Vehicle(new VehicleId("vehicle-1"), new VehicleIdentifier("REG-1")))),
+            new DuplicateRepositoryResult.Success(new DuplicateCheckResult.Duplicate(
+                new DuplicateState(
+                    new TransactionKey("existing"),
+                    new PreviousUploadOutcome.CanonicalFinalized()))))
+            .Classify(RepositoryRequest());
+
+        var response = Assert.IsType<FuelUploadMapResult<FuelUploadResponseDto>.Success>(result).Value;
+        Assert.Equal("skipped_duplicate", response.Decisions[0].Outcome);
+        Assert.Equal("existing", response.Decisions[0].TransactionKey);
+    }
+
+    [Fact]
+    public void Repository_failure_is_typed_and_not_a_validation_error()
+    {
+        var repositoryError = new VehicleRepositoryError(VehicleRepositoryErrorCode.TimedOut, "vehicle store timed out");
+        var result = RepositoryService(
+            new VehicleRepositoryResult.Failure(repositoryError),
+            new DuplicateRepositoryResult.Success(new DuplicateCheckResult.NotDuplicate(new TransactionKey("txn-1"))))
+            .Classify(RepositoryRequest());
+
+        var response = Assert.IsType<FuelUploadMapResult<FuelUploadResponseDto>.Success>(result).Value;
+        Assert.Equal("fatal", response.Decisions[0].Outcome);
+        Assert.Equal(nameof(FatalErrorCode.VehicleLookupUnavailable), response.Decisions[0].FatalCode);
+        Assert.Empty(response.Decisions[0].ValidationErrors);
+        Assert.Equal(VehicleRepositoryErrorCode.TimedOut, repositoryError.Code);
+    }
+
+    [Fact]
+    public void Quarantine_still_works_with_repository_backed_service()
+    {
+        var request = RepositoryRequest() with
+        {
+            Rows = [RepositoryRow() with { MerchantName = "Manual fuel entry" }]
+        };
+
+        var result = RepositoryService(
+            new VehicleRepositoryResult.Success(new VehicleLookupResult.Found(
+                new Vehicle(new VehicleId("vehicle-1"), new VehicleIdentifier("REG-1")))),
+            new DuplicateRepositoryResult.Success(new DuplicateCheckResult.NotDuplicate(new TransactionKey("txn-1"))))
+            .Classify(request);
+
+        var response = Assert.IsType<FuelUploadMapResult<FuelUploadResponseDto>.Success>(result).Value;
+        Assert.Equal("quarantined", response.Decisions[0].Outcome);
+        Assert.Equal(1, response.QuarantinedRows);
+    }
+
+    [Fact]
+    public void Repository_backed_service_summary_matches_application_summary()
+    {
+        var request = RepositoryRequest();
+        var repositoryResult = RepositoryService(
+            new VehicleRepositoryResult.Success(new VehicleLookupResult.Found(
+                new Vehicle(new VehicleId("vehicle-1"), new VehicleIdentifier("REG-1")))),
+            new DuplicateRepositoryResult.Success(new DuplicateCheckResult.NotDuplicate(new TransactionKey("txn-1"))))
+            .Classify(request);
+        var dtoResult = new FuelUploadApplicationService().Classify(
+            request with { Rows = [ValidRow(1)] });
+
+        var repositoryResponse = Assert.IsType<FuelUploadMapResult<FuelUploadResponseDto>.Success>(repositoryResult).Value;
+        var dtoResponse = Assert.IsType<FuelUploadMapResult<FuelUploadResponseDto>.Success>(dtoResult).Value;
+        Assert.Equal(dtoResponse.TotalRows, repositoryResponse.TotalRows);
+        Assert.Equal(dtoResponse.AcceptedTransactions, repositoryResponse.AcceptedTransactions);
+        Assert.Equal(dtoResponse.UploadableTransactions, repositoryResponse.UploadableTransactions);
+    }
+
     private static FuelUploadRequestDto ValidRequest()
     {
         return new FuelUploadRequestDto(
@@ -105,6 +203,31 @@ public sealed class FuelUploadApplicationBoundaryTests
             SuspiciousTotalCost: 99m,
             Today: "2026-05-21",
             Rows: [ValidRow(1)]);
+    }
+
+    private static FuelUploadRequestDto RepositoryRequest()
+    {
+        return ValidRequest() with { Rows = [RepositoryRow()] };
+    }
+
+    private static FuelUploadRowDto RepositoryRow()
+    {
+        return ValidRow(1) with
+        {
+            VehicleLookupStatus = null,
+            VehicleId = null,
+            DuplicateStatus = null,
+            TransactionKey = null
+        };
+    }
+
+    private static RepositoryFuelUploadApplicationService RepositoryService(
+        VehicleRepositoryResult vehicleResult,
+        DuplicateRepositoryResult duplicateResult)
+    {
+        return new RepositoryFuelUploadApplicationService(
+            new FakeVehicleRepository(vehicleResult),
+            new FakeDuplicateRepository(duplicateResult));
     }
 
     private static FuelUploadRowDto ValidRow(int rowNumber)
@@ -138,5 +261,15 @@ public sealed class FuelUploadApplicationBoundaryTests
             2m,
             20m,
             new ExternalReference("line-1"));
+    }
+
+    private sealed class FakeVehicleRepository(VehicleRepositoryResult result) : IVehicleRepository
+    {
+        public VehicleRepositoryResult Lookup(VehicleIdentifier identifier) => result;
+    }
+
+    private sealed class FakeDuplicateRepository(DuplicateRepositoryResult result) : IDuplicateRepository
+    {
+        public DuplicateRepositoryResult Lookup(DuplicateLookup lookup) => result;
     }
 }
