@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tour: the normal C# fuel engine - Blub &amp; Fuel</title>
+  <link rel="stylesheet" href="../book.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="book-title" href="../index.html">Blub &amp; Fuel</a>
+    <nav><ol><li><a href="../index.html">Blub &amp; Fuel</a></li><li><a href="../setup.html">Setup</a></li><li><a href="01-blub-paradox.html">The Blub Paradox</a></li><li><a href="02-normal-csharp-tour.html" aria-current="page" class="active">Tour: the normal C# fuel engine</a></li><li><a href="03-seven-footguns.html">Seven footguns</a></li><li><a href="04-idiomatic-csharp.html">Idiomatic C#: same language, modern features on</a></li><li><a href="05-fsharp-native.html">F#: leaving C# behind</a></li><li><a href="06-fsharp-interop.html">F# interop: where the domain meets C#</a></li><li><a href="07-haskell-primer.html">A Haskell primer for C# developers</a></li><li><a href="08-haskell-safety.html">Haskell: making the bug unrepresentable</a></li><li><a href="09-rust-lands.html">Rust: a different goal, the same place</a></li><li><a href="10-the-punch.html">The punch: what each rung made impossible</a></li><li><a href="../part1b/11-boundary-returns.html">The boundary returns</a></li><li><a href="../part1b/12-boundary-side-by-side.html">Four engines at the boundary</a></li><li><a href="../part1b/13-final-takeaway.html">The final takeaway</a></li><li><a href="../part2/r1-decision.html">Modelling the row decision</a></li><li><a href="../part2/r2-validation.html">Validation and warnings</a></li><li><a href="../part2/r3-recovery.html">Duplicate / recovery policy</a></li><li><a href="../part2/r4-boundary.html">The boundary</a></li><li><a href="../part2/r5-exhaustiveness.html">Exhaustiveness</a></li><li><a href="../part2/r6-mutability.html">Mutability and identity</a></li><li><a href="../part2/r7-null.html">Null and absence</a></li><li><a href="../references.html">references</a></li></ol></nav>
+  </aside>
+  <main>
+    <header class="page-header">
+      <p class="kicker">Static reader</p>
+      <h1>Tour: the normal C# fuel engine</h1>
+      <p class="source-link">Generated from <a href="../../../book/part1/02-normal-csharp-tour.qmd">part1/02-normal-csharp-tour.qmd</a>.</p>
+    </header>
+    <article>
+      <p>This is the code your team actually ships first. It builds with no warnings, the happy-path tests are green, and any C# developer hired off the street can read it on day one. The whole engine is roughly two hundred lines of code in three folders. We&#x27;re going to walk through it.</p>
+<p>The point of the tour is not to laugh at it. The point is to show <strong>what is normal</strong> — so that when chapter <a href="03-seven-footguns.html">seven footguns</a> points at the bugs, you can see they&#x27;re not stupidity. They are the default shape of C# when the language&#x27;s optional features are turned off.</p>
+<h2 id="the-folder-layout">The folder layout</h2>
+<p>Three folders. Models hold data. Services hold logic. Dtos hold the boundary shapes.</p>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart TB
+  subgraph Models[&quot;Models — data, all mutable&quot;]
+    FR[FuelRow]
+    V[Vehicle]
+    FT[FuelTransaction]
+    VC[ValidationConfig]
+    RD[&quot;RowDecision&lt;br/&gt;Status: string&quot;]
+    BS[BatchSummary]
+  end
+
+  subgraph Services[&quot;Services — logic&quot;]
+    UM[&quot;UploadModes&lt;br/&gt;string constants&quot;]
+    VEX[&quot;ValidationException&lt;br/&gt;thrown&quot;]
+    FRV[&quot;FuelRowValidator&lt;br/&gt;throws on first failure&quot;]
+    DP[&quot;DuplicatePolicy&lt;br/&gt;out-bool + reason string&quot;]
+    FUS[&quot;FuelUploadService&lt;br/&gt;orchestrator&quot;]
+  end
+
+  subgraph Dtos[&quot;Dtos — boundary&quot;]
+    Req[FuelUploadRequestDto]
+    Resp[FuelUploadResponseDto]
+  end
+
+  Req --&gt; FUS
+  FUS --&gt; FRV
+  FUS --&gt; DP
+  FUS --&gt; Resp
+  Resp --&gt; RD</code></pre></figure>
+<p>Nothing exotic. No discriminated unions, no <code>IReadOnlyList&lt;T&gt;</code>, no records, no nullable reference types. The csproj has <code>&lt;Nullable&gt;disable&lt;/Nullable&gt;</code> — every reference is implicitly nullable and the compiler stays quiet about it.</p>
+<h2 id="the-models">The models</h2>
+<p><code>FuelRow</code> is a plain class with public getters and setters. Every property is independently mutable.</p>
+<pre><code class="language-csharp">public class FuelRow
+{
+    public int RowNumber { get; set; }
+    public string VehicleRef { get; set; }
+    public string SourceId { get; set; }
+    public DateTime OccurredOn { get; set; }
+    public decimal QuantityLiters { get; set; }
+    public decimal TotalCost { get; set; }
+    public string MerchantName { get; set; }
+    public int Odometer { get; set; }
+}</code></pre>
+<blockquote><p><code>src/FuelUploadEngine/Models/FuelRow.cs</code> lines 5–15</p></blockquote>
+<p><code>RowDecision</code> is the centre of the design. It&#x27;s <strong>one flat class</strong> that represents every possible outcome. Which outcome it actually is, is encoded in a string field called <code>Status</code>. Some properties are valid only for some statuses; the rest are left null.</p>
+<pre><code class="language-csharp">public class RowDecision
+{
+    public int RowNumber;
+    public string Status;                     // &quot;Accepted&quot; | &quot;AcceptedWithWarnings&quot; | &quot;Quarantined&quot; | &quot;Skipped&quot; | &quot;Rejected&quot; | &quot;Fatal&quot;
+    public FuelTransaction Transaction;       // null when Status is Rejected / Fatal / Skipped
+    public Vehicle Vehicle;                   // null when vehicle lookup failed
+    public List&lt;string&gt; Errors = new List&lt;string&gt;();
+    public List&lt;string&gt; Warnings = new List&lt;string&gt;();
+    public List&lt;string&gt; QuarantineReasons = new List&lt;string&gt;();
+    public string SkipReason;                 // populated when Status == &quot;Skipped&quot;
+    public string FatalMessage;               // populated when Status == &quot;Fatal&quot;
+}</code></pre>
+<blockquote><p><code>src/FuelUploadEngine/Models/RowDecision.cs</code> lines 7–18</p></blockquote>
+<p><code>BatchSummary</code> is a counter bag. One integer per status, plus a total.</p>
+<pre><code class="language-csharp">public class BatchSummary
+{
+    public int TotalRows { get; set; }
+    public int Accepted { get; set; }
+    public int AcceptedWithWarnings { get; set; }
+    public int Quarantined { get; set; }
+    public int Skipped { get; set; }
+    public int Rejected { get; set; }
+    public int Fatal { get; set; }
+}</code></pre>
+<blockquote><p><code>src/FuelUploadEngine/Models/BatchSummary.cs</code> lines 3–12</p></blockquote>
+<p><strong>Why this is normal.</strong> Public setters are the default. A class with six counters and a class with nine optional fields is exactly what most intro tutorials produce. It compiles, it serialises, it tests fine.</p>
+<h2 id="the-string-constants">The string constants</h2>
+<p>The modes and the outcome enums are not enums. They&#x27;re string constants grouped in static classes — because the request lands as JSON and &quot;passing the string through&quot; felt simpler than mapping it.</p>
+<pre><code class="language-csharp">public static class UploadModes
+{
+    public const string Normal = &quot;Normal&quot;;
+    public const string Retry = &quot;Retry&quot;;
+    public const string ConservativeRecovery = &quot;ConservativeRecovery&quot;;
+    public const string AggressiveRecovery = &quot;AggressiveRecovery&quot;;
+}</code></pre>
+<blockquote><p><code>src/FuelUploadEngine/Services/UploadModes.cs</code> lines 6–12</p></blockquote>
+<p>There are matching <code>PreviousOutcomes</code>, <code>VehicleLookupStatuses</code>, and <code>DuplicateStatuses</code> classes in the same file. Every comparison in the codebase is a string comparison.</p>
+<p><strong>Why this is normal.</strong> Many real C# codebases do exactly this for &quot;don&#x27;t want the deserializer to fight me&quot; reasons. It works until somebody on a JS client sends <code>&quot;retry&quot;</code> instead of <code>&quot;Retry&quot;</code>.</p>
+<h2 id="the-validator">The validator</h2>
+<p><code>FuelRowValidator</code> is a static class with one method that throws on the first failure. The exception type carries the failure reason in its <code>Message</code>.</p>
+<pre><code class="language-csharp">public static void Validate(FuelRow row, ValidationConfig config)
+{
+    if (row.QuantityLiters &lt;= config.MinQuantityLiters)
+        throw new ValidationException(&quot;QuantityNotPositive&quot;);
+
+    if (row.QuantityLiters &gt; config.MaxQuantityLiters)
+        throw new ValidationException(&quot;QuantityExceedsMaximum&quot;);
+
+    if (row.TotalCost &lt;= 0m)
+        throw new ValidationException(&quot;CostNotPositive&quot;);
+
+    if (string.IsNullOrEmpty(row.VehicleRef))
+        throw new ValidationException(&quot;VehicleRefRequired&quot;);
+
+    if (string.IsNullOrEmpty(row.MerchantName))
+        throw new ValidationException(&quot;MerchantRequired&quot;);
+
+    if (row.OccurredOn &gt; DateTime.UtcNow)
+        throw new ValidationException(&quot;TransactionDateInFuture&quot;);
+}</code></pre>
+<blockquote><p><code>src/FuelUploadEngine/Services/FuelRowValidator.cs</code> lines 13–32</p></blockquote>
+<p><strong>Why this is normal.</strong> Exceptions for &quot;bad input&quot; feel idiomatic in C# — there&#x27;s nothing in the language nudging you toward a <code>Result&lt;T, Errors&gt;</code> shape. The whole pattern of accumulating errors and returning them as a list is something you have to know to look for.</p>
+<h2 id="the-duplicate-policy">The duplicate policy</h2>
+<p>Four upload modes, six previous outcomes. The policy returns a <code>bool</code> through the return value and a skip reason through an <code>out</code> parameter.</p>
+<pre><code class="language-csharp">public static bool ShouldAcceptDuplicate(string mode, string previousOutcome, out string skipReason)
+{
+    skipReason = &quot;&quot;;
+
+    if (mode == UploadModes.Normal) { skipReason = &quot;NormalModeDuplicate&quot;; return false; }
+
+    if (mode == UploadModes.Retry)
+    {
+        if (previousOutcome == PreviousOutcomes.RetryableFailure) return true;
+        skipReason = &quot;RetryModeNotRetryable&quot;;
+        return false;
+    }
+    // ... ConservativeRecovery and AggressiveRecovery branches ...
+
+    skipReason = &quot;UnknownMode&quot;;
+    return false;
+}</code></pre>
+<blockquote><p><code>src/FuelUploadEngine/Services/DuplicatePolicy.cs</code> lines 9–55</p></blockquote>
+<p>Look at it. The control flow is a flat list of <code>if</code> statements on two strings. There is nothing telling the compiler that these strings have a closed set of values. If you forget a <code>(mode, previousOutcome)</code> combination it silently falls through to <code>UnknownMode</code>.</p>
+<p><strong>Why this is normal.</strong> This is what <code>if</code>/<code>else</code> chains on stringly-typed inputs look like in any language without sum types. The author of this code is not careless — there&#x27;s just no compiler check to fail.</p>
+<h2 id="the-orchestrator">The orchestrator</h2>
+<p><code>FuelUploadService.Process</code> is the entry point. It loops over each input row, calls <code>ProcessOneRow</code> inside a try/catch, then logs the decision, then computes the summary.</p>
+<pre><code class="language-csharp">foreach (var input in request.Rows)
+{
+    var decision = new RowDecision();
+    decision.RowNumber = input.RowNumber;
+
+    try
+    {
+        ProcessOneRow(input, request.Mode, config, decision);
+    }
+    catch (ValidationException vex)
+    {
+        decision.Status = &quot;Rejected&quot;;
+        decision.Errors.Add(vex.Message);
+    }
+    catch (Exception ex)
+    {
+        decision.Status = &quot;Fatal&quot;;
+        decision.FatalMessage = ex.Message;
+    }
+
+    response.Decisions.Add(decision);
+    LogDecision(decision);
+}</code></pre>
+<blockquote><p><code>src/FuelUploadEngine/Services/FuelUploadService.cs</code> lines 20–44</p></blockquote>
+<p>The decision object is <strong>mutated in place</strong> by <code>ProcessOneRow</code>. The catch blocks mutate it again. Then <code>LogDecision</code> reads it. Then it&#x27;s appended to the response list.</p>
+<p><code>LogDecision</code> is the innocent-looking line that lights the fuse:</p>
+<pre><code class="language-csharp">private void LogDecision(RowDecision d)
+{
+    Console.WriteLine(
+        &quot;row &quot; + d.RowNumber +
+        &quot; plate=&quot; + d.Vehicle.LicensePlate +
+        &quot; status=&quot; + d.Status);
+}</code></pre>
+<blockquote><p><code>src/FuelUploadEngine/Services/FuelUploadService.cs</code> lines 154–163</p></blockquote>
+<p><code>d.Vehicle</code> is null whenever the vehicle lookup didn&#x27;t return Found. The code dereferences it unconditionally. The first not-found row in production takes down the whole batch with a <code>NullReferenceException</code>.</p>
+<p><code>ComputeSummary</code> is the other suspicious piece. It&#x27;s a <code>switch</code> <em>statement</em> with no default arm:</p>
+<pre><code class="language-csharp">switch (d.Status)
+{
+    case &quot;Accepted&quot;: s.Accepted++; break;
+    case &quot;AcceptedWithWarnings&quot;: s.AcceptedWithWarnings++; break;
+    case &quot;Quarantined&quot;: s.Quarantined++; break;
+    case &quot;Skipped&quot;: s.Skipped++; break;
+    case &quot;Rejected&quot;: s.Rejected++; break;
+    case &quot;Fatal&quot;: s.Fatal++; break;
+    // No default branch -- any &quot;new&quot; status string we forget
+    // to handle here will silently fail to be counted.
+}</code></pre>
+<blockquote><p><code>src/FuelUploadEngine/Services/FuelUploadService.cs</code> lines 171–183</p></blockquote>
+<p>A new status string introduced anywhere upstream silently fails to be counted. The total stops matching <code>TotalRows</code> but no exception is raised.</p>
+<p><strong>Why this is normal.</strong> Mutating an output object in a loop and logging in the same loop is the most direct way to write this code. The switch statement is C# 1.0 syntax. It&#x27;s everywhere.</p>
+<h2 id="the-pipeline-as-data-flow">The pipeline as data flow</h2>
+<p>Here is the same orchestrator, drawn as a data flow:</p>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart LR
+  Req[FuelUploadRequestDto] --&gt; Loop[loop over Rows]
+  Loop --&gt; PR[ParsedFuelRow + Vehicle + DuplicateStatus]
+  PR --&gt; VLU[Vehicle lookup status]
+  VLU --&gt; VAL[FuelRowValidator.Validate]
+  VAL --&gt; VCK[Vehicle outcome check]
+  VCK --&gt; DUP[DuplicatePolicy.ShouldAcceptDuplicate]
+  DUP --&gt; BAD[BuildAcceptedDecision]
+  BAD --&gt; RD[RowDecision]
+  RD --&gt; LOG[LogDecision]
+  LOG --&gt; SUM[ComputeSummary]
+  SUM --&gt; Resp[FuelUploadResponseDto]</code></pre></figure>
+<p>The shape is fine. The exact same shape appears in the F# and Haskell versions. <strong>What&#x27;s different is what the type system knows about each arrow.</strong></p>
+<h2 id="where-the-wheels-come-off">Where the wheels come off</h2>
+<p>Now annotate that same diagram with the places where the code does something the type system can&#x27;t see:</p>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart LR
+  Req[FuelUploadRequestDto] --&gt;|Mode is a string| Loop[loop over Rows]
+  Loop --&gt; PR[Input row]
+  PR --&gt;|VehicleLookupStatus is a string| VLU[Vehicle lookup status]
+  VLU --&gt; VAL[FuelRowValidator.Validate]
+  VAL -.-&gt;|throws on first failure| CATCH[catch ValidationException]
+  VAL --&gt; VCK[Vehicle outcome check]
+  VCK --&gt;|sets decision.Vehicle only if Found| DUP[DuplicatePolicy]
+  DUP --&gt;|out-bool + reason string| BAD[BuildAcceptedDecision]
+  BAD --&gt; RD[&quot;RowDecision&lt;br/&gt;Status is a string&lt;br/&gt;Errors is a mutable List&quot;]
+  RD --&gt; LOG[&quot;LogDecision&lt;br/&gt;reads d.Vehicle.LicensePlate&lt;br/&gt;NRE if Vehicle is null&quot;]
+  LOG --&gt; SUM[&quot;ComputeSummary&lt;br/&gt;switch statement, no default&lt;br/&gt;new statuses silently drop&quot;]
+  SUM --&gt; Resp[FuelUploadResponseDto]
+  CATCH -.-&gt; RD</code></pre></figure>
+<p>Seven distinct places where the language could have warned the author and didn&#x27;t. Three of them — the <code>LogDecision</code> NRE, the case-sensitive mode string, and the missing aggressive-recovery branch — already have failing tests pinning the buggy behaviour in <code>FuelUploadServiceTests.cs</code>. The other four are the kind of bug nobody notices until production.</p>
+<p>That&#x27;s the next chapter: <a href="03-seven-footguns.html">seven footguns</a> — each one named, located, demonstrated, and matched to the language feature that would have made it impossible.</p>
+    </article>
+    <footer class="pager">
+      <a class="pager-prev" href="01-blub-paradox.html">Previous: The Blub Paradox</a>
+      <a class="pager-next" href="03-seven-footguns.html">Next: Seven footguns</a>
+    </footer>
+  </main>
+</body>
+</html>

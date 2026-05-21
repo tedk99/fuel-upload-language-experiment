@@ -7,7 +7,12 @@
 **/.spago/
 **/output/
 .DS_Store
+._*
+.__*
+**/__pycache__/
 *.log
 
 /.quarto/
 **/*.quarto_ipynb
+/.quarto-cli/
+/.venv-jupyter-book/

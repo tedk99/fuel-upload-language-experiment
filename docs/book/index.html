@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Blub &amp; Fuel - Blub &amp; Fuel</title>
+  <link rel="stylesheet" href="book.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="book-title" href="index.html">Blub &amp; Fuel</a>
+    <nav><ol><li><a href="index.html" aria-current="page" class="active">Blub &amp; Fuel</a></li><li><a href="setup.html">Setup</a></li><li><a href="part1/01-blub-paradox.html">The Blub Paradox</a></li><li><a href="part1/02-normal-csharp-tour.html">Tour: the normal C# fuel engine</a></li><li><a href="part1/03-seven-footguns.html">Seven footguns</a></li><li><a href="part1/04-idiomatic-csharp.html">Idiomatic C#: same language, modern features on</a></li><li><a href="part1/05-fsharp-native.html">F#: leaving C# behind</a></li><li><a href="part1/06-fsharp-interop.html">F# interop: where the domain meets C#</a></li><li><a href="part1/07-haskell-primer.html">A Haskell primer for C# developers</a></li><li><a href="part1/08-haskell-safety.html">Haskell: making the bug unrepresentable</a></li><li><a href="part1/09-rust-lands.html">Rust: a different goal, the same place</a></li><li><a href="part1/10-the-punch.html">The punch: what each rung made impossible</a></li><li><a href="part1b/11-boundary-returns.html">The boundary returns</a></li><li><a href="part1b/12-boundary-side-by-side.html">Four engines at the boundary</a></li><li><a href="part1b/13-final-takeaway.html">The final takeaway</a></li><li><a href="part2/r1-decision.html">Modelling the row decision</a></li><li><a href="part2/r2-validation.html">Validation and warnings</a></li><li><a href="part2/r3-recovery.html">Duplicate / recovery policy</a></li><li><a href="part2/r4-boundary.html">The boundary</a></li><li><a href="part2/r5-exhaustiveness.html">Exhaustiveness</a></li><li><a href="part2/r6-mutability.html">Mutability and identity</a></li><li><a href="part2/r7-null.html">Null and absence</a></li><li><a href="references.html">references</a></li></ol></nav>
+  </aside>
+  <main>
+    <header class="page-header">
+      <p class="kicker">Static reader</p>
+      <h1>Blub &amp; Fuel</h1>
+      <p class="source-link">Generated from <a href="../../book/index.qmd">index.qmd</a>.</p>
+    </header>
+    <article>
+      <h1 id="welcome">Welcome</h1>
+<p>This is a teaching book.</p>
+<p>It exists because a senior engineer can tell you &quot;F# is better at this&quot; and a junior will nod, but neither of them will know <em>what kind of bug</em> the junior was about to ship that F# would have refused to compile. Paul Graham calls this the <strong>blub paradox</strong> — you can&#x27;t see what your current language is missing until you&#x27;ve used a more expressive one.</p>
+<p>So instead of one essay, we built the same small domain — a fuel-upload engine that parses transactions, validates them, decides duplicates, quarantines suspicious ones, and emits a summary — <strong>five times</strong>, in five different ways:</p>
+<div class="table-wrap"><table><thead><tr><th>Engine</th><th>Style</th></tr></thead><tbody><tr><td><code>normalcsharp-fuel-engine</code></td><td>C# the way a junior writes it: mutable POCOs, string-typed status, exceptions as control flow, no NRT</td></tr><tr><td><code>csharp-fuel-engine</code></td><td>C# the way a senior writes it: sealed-record DUs, NRT, switch expressions, <code>IReadOnlyList</code>, records</td></tr><tr><td><code>fsharp-fuel-engine</code></td><td>F# — native discriminated unions, exhaustive pattern matching, immutability by default</td></tr><tr><td><code>haskell-fuel-engine</code></td><td>Haskell — type-driven everything: <code>NonEmpty</code>, <code>data</code>, purity, <code>IO</code> quarantine</td></tr><tr><td><code>rust-fuel-engine</code></td><td>Rust — same algebraic types as Haskell, plus ownership and zero-cost abstractions</td></tr></tbody></table></div>
+<p>All five produce the same outputs for the same inputs. They differ in <strong>which class of bug each one even allows you to make</strong>.</p>
+<h2 id="how-to-read-this-book">How to read this book</h2>
+<p>There are two ways.</p>
+<p><strong>Part I — The Journey</strong> is the linear narrative. You start at the normal-C# implementation, you walk up the ladder one rung at a time, and you watch each language make a class of error structurally impossible. Ten chapters, each 5–10 minutes. If you read end to end, that&#x27;s the blub paradox delivered in one sitting.</p>
+<p><strong>Part II — The Reference</strong> is the lookup. You pick a topic (modelling the decision, validation, recovery policy, exhaustiveness, mutability, null, boundary mapping) and see how all five languages handle it side-by-side, with tradeoffs called out. Each reference chapter is 1–3 pages.</p>
+<p>The two halves are cross-linked. Part I points into Part II when you&#x27;d benefit from a deeper side-by-side; Part II points back into Part I for the narrative context.</p>
+<h2 id="what-you-ll-get-out-of-it">What you&#x27;ll get out of it</h2>
+<ul><li>A vocabulary for things your current language doesn&#x27;t model — <em>exhaustive pattern matching</em>, <em>non-null-by-default</em>, <em>discriminated unions</em>, <em>type-level guarantees on collections</em>, <em>no hidden side effects</em>.</li><li>A clear picture of which of those each of these languages gives you for free, which you have to opt into, and which require leaving the language.</li><li>A taxonomy of seven concrete footguns in junior C# code, mapped to the language feature that would have closed each one.</li><li>An answer to &quot;how easy is this to extend?&quot; for each language. You&#x27;ll see what happens when you add a 7th case to a discriminated union in each one.</li></ul>
+<h2 id="source-code">Source code</h2>
+<p>All five implementations are checked in alongside this book. Read <a href="setup.html"><code>Setup</code></a> for how to build and run them locally.</p>
+    </article>
+    <footer class="pager">
+      
+      <a class="pager-next" href="setup.html">Next: Setup</a>
+    </footer>
+  </main>
+</body>
+</html>

@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Haskell: making the bug unrepresentable - Blub &amp; Fuel</title>
+  <link rel="stylesheet" href="../book.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="book-title" href="../index.html">Blub &amp; Fuel</a>
+    <nav><ol><li><a href="../index.html">Blub &amp; Fuel</a></li><li><a href="../setup.html">Setup</a></li><li><a href="01-blub-paradox.html">The Blub Paradox</a></li><li><a href="02-normal-csharp-tour.html">Tour: the normal C# fuel engine</a></li><li><a href="03-seven-footguns.html">Seven footguns</a></li><li><a href="04-idiomatic-csharp.html">Idiomatic C#: same language, modern features on</a></li><li><a href="05-fsharp-native.html">F#: leaving C# behind</a></li><li><a href="06-fsharp-interop.html">F# interop: where the domain meets C#</a></li><li><a href="07-haskell-primer.html">A Haskell primer for C# developers</a></li><li><a href="08-haskell-safety.html" aria-current="page" class="active">Haskell: making the bug unrepresentable</a></li><li><a href="09-rust-lands.html">Rust: a different goal, the same place</a></li><li><a href="10-the-punch.html">The punch: what each rung made impossible</a></li><li><a href="../part1b/11-boundary-returns.html">The boundary returns</a></li><li><a href="../part1b/12-boundary-side-by-side.html">Four engines at the boundary</a></li><li><a href="../part1b/13-final-takeaway.html">The final takeaway</a></li><li><a href="../part2/r1-decision.html">Modelling the row decision</a></li><li><a href="../part2/r2-validation.html">Validation and warnings</a></li><li><a href="../part2/r3-recovery.html">Duplicate / recovery policy</a></li><li><a href="../part2/r4-boundary.html">The boundary</a></li><li><a href="../part2/r5-exhaustiveness.html">Exhaustiveness</a></li><li><a href="../part2/r6-mutability.html">Mutability and identity</a></li><li><a href="../part2/r7-null.html">Null and absence</a></li><li><a href="../references.html">references</a></li></ol></nav>
+  </aside>
+  <main>
+    <header class="page-header">
+      <p class="kicker">Static reader</p>
+      <h1>Haskell: making the bug unrepresentable</h1>
+      <p class="source-link">Generated from <a href="../../../book/part1/08-haskell-safety.qmd">part1/08-haskell-safety.qmd</a>.</p>
+    </header>
+    <article>
+      <h2 id="the-climax-of-the-climb">The climax of the climb</h2>
+<p>Every rung up to now has been about <em>catching</em> bugs. Idiomatic C# made the compiler emit <code>CS8509</code> on a non-exhaustive switch expression. F# made <code>match</code> warn on a missing DU case and let you flip it to a build error. Each rung shrank the set of bugs you could ship without the compiler shouting.</p>
+<p>Haskell asks a different question. Not &quot;does the compiler warn me&quot; but <strong>is there a value of this type that could even represent the bug?</strong></p>
+<p>If the type system can&#x27;t express the bug, you cannot ship it. You cannot write a test that hits it. You can&#x27;t even write a unit test that <em>demonstrates</em> it without the test itself failing to compile. The footgun isn&#x27;t avoided. It&#x27;s structurally absent.</p>
+<p>Let&#x27;s walk the seven-footgun catalogue one more time, on the cliff face.</p>
+<h2 id="the-seven-footguns-haskell-column">The seven footguns, Haskell column</h2>
+<p>Recall the catalogue from chapter 3:</p>
+<ol><li>NRE in the logger — <code>d.Vehicle.LicensePlate</code> when <code>Vehicle</code> is null</li><li>Case-sensitive mode string — <code>&quot;retry&quot;</code> vs <code>&quot;Retry&quot;</code></li><li>Missing recovery branch — <code>AggressiveRecovery</code> falls through silently</li><li>Mutable response — caller appends to <code>Errors</code> after the engine returns</li><li>Status typos compile — <code>&quot;Accepetd&quot;</code> ships</li><li>Validator throws on first failure — only one error per row reported</li><li><code>switch</code> without a default — new case silently dropped</li></ol>
+<h3 id="footgun-1-rogue-logger-touches-a-nullable-field">Footgun 1 — Rogue logger touches a nullable field</h3>
+<p><strong>Representable in Haskell?</strong> No.</p>
+<p>The classifier&#x27;s type is <code>ValidationConfig -&gt; UploadMode -&gt; RowContext -&gt; RowDecision</code>. No <code>IO</code> anywhere. You cannot call <code>putStrLn</code> (Haskell&#x27;s <code>Console.WriteLine</code>) inside a function with that signature — the compiler refuses with a type mismatch. To add a logger, you&#x27;d have to change the signature to <code>… -&gt; IO RowDecision</code>, which forces every caller all the way up to <code>main</code> into <code>IO</code>. Logging cannot hide.</p>
+<p>And even if it were allowed, there is no nullable field to crash on. Each <code>RowDecision</code> constructor carries exactly its case&#x27;s payload. There&#x27;s no shared shape with a &quot;sometimes null <code>Vehicle</code>&quot; hanging off it. The crash site doesn&#x27;t exist as a value.</p>
+<h3 id="footgun-2-case-sensitive-mode-string">Footgun 2 — Case-sensitive mode string</h3>
+<p><strong>Representable in Haskell?</strong> Inside the domain — no. At the boundary — yes, but caught.</p>
+<p><code>UploadMode</code> is a closed sum type:</p>
+<pre><code class="language-haskell">data UploadMode
+  = Normal
+  | Retry
+  | ConservativeRecovery
+  | AggressiveRecovery
+  deriving stock (Eq, Show)</code></pre>
+<p>Once you&#x27;re holding an <code>UploadMode</code>, you cannot have an unknown variant. The string <code>&quot;retry&quot;</code> cannot be implicitly compared. It&#x27;s just not a value of that type.</p>
+<p>The string only exists at the boundary, in <code>Api.hs</code>:</p>
+<pre><code class="language-haskell">parseMode :: String -&gt; String -&gt; Either [FuelUploadMappingError] UploadMode
+parseMode field value =
+  case normalize value of
+    &quot;normal&quot; -&gt; Right Normal
+    &quot;retry&quot; -&gt; Right Retry
+    &quot;conservativerecovery&quot; -&gt; Right ConservativeRecovery
+    &quot;aggressiverecovery&quot; -&gt; Right AggressiveRecovery
+    _ -&gt; Left [FuelUploadMappingError InvalidUploadMode field ...]</code></pre>
+<p>The return type is <code>Either [FuelUploadMappingError] UploadMode</code>. The caller cannot pretend an unparsed string is a valid mode. They have to handle the <code>Left</code> branch — that&#x27;s the type system speaking.</p>
+<h3 id="footgun-3-missing-recovery-branch">Footgun 3 — Missing recovery branch</h3>
+<p><strong>Representable in Haskell?</strong> No.</p>
+<p>The recovery matrix in <code>DuplicatePolicy.hs</code> is a series of equations over <code>(UploadMode, DuplicateState)</code>. Add a fifth <code>UploadMode</code> case called <code>ManualOverride</code> to <code>Domain/Primitive.hs</code> and run <code>cabal build</code>. You get:</p>
+<pre><code class="language-text">src/FuelUpload/DuplicatePolicy.hs: warning: [-Wincomplete-patterns]
+    Pattern match(es) are non-exhaustive
+    In an equation for &#x27;duplicateDecision&#x27;:
+        Patterns of type &#x27;UploadMode&#x27;, &#x27;DuplicateState&#x27; not matched:
+            ManualOverride (DuplicateOf _)</code></pre>
+<p>This project&#x27;s <code>.cabal</code> enables <code>-Wincomplete-uni-patterns</code>, and the conventional production setting flips warnings to errors via <code>-Werror</code>. The build fails until you&#x27;ve handled every combination. You cannot ship the unhandled case.</p>
+<p>C#&#x27;s <code>switch</code> <em>expression</em> has a similar property (CS8509), but its <code>switch</code> <em>statement</em> does not — and the normal-C# version uses statements. Haskell has only one <code>case</code> form, and it&#x27;s always checked.</p>
+<h3 id="footgun-4-mutable-response">Footgun 4 — Mutable response</h3>
+<p><strong>Representable in Haskell?</strong> No.</p>
+<p>There is no <code>mutable</code> keyword in Haskell. There is no <code>var</code>. Records cannot be mutated; the closest you get is record-update syntax, which <em>creates a new value</em> that differs from the old one by the named fields. The old value is untouched.</p>
+<pre><code class="language-haskell">bumpTotal summary =
+  summary {summaryTotalRows = summaryTotalRows summary + 1}</code></pre>
+<p>That doesn&#x27;t change <code>summary</code>. It returns a new <code>BatchSummary</code>. If a caller holds the old <code>summary</code> after this call, they still hold the old value. Aliasing-based mutation isn&#x27;t possible because nothing mutates.</p>
+<p>To get true in-place mutability you need <code>IORef</code> or <code>STRef</code> — and those types themselves appear in your function signature (<code>IORef</code> lives in <code>IO</code>, <code>STRef</code> in <code>ST</code>). Hidden mutation is impossible. Footgun 4 cannot be written in Haskell at all.</p>
+<h3 id="footgun-5-status-typos-compile">Footgun 5 — Status typos compile</h3>
+<p><strong>Representable in Haskell?</strong> No.</p>
+<p>There are no status strings. The &quot;status&quot; of a row decision is the constructor name:</p>
+<pre><code class="language-haskell">data RowDecision
+  = Accepted FuelTransaction
+  | AcceptedWithWarnings FuelTransaction (NonEmpty ValidationWarning)
+  | Quarantined FuelTransaction (NonEmpty QuarantineReason)
+  | SkippedDuplicate SkippedDuplicate
+  | Rejected RejectedRow
+  | Fatal FatalError
+  deriving stock (Eq, Show)</code></pre>
+<p>Typing <code>Accepetd transaction</code> produces a compile error: &quot;Data constructor not in scope: <code>Accepetd</code>.&quot; There&#x27;s no string layer for the typo to survive into. The serialization to JSON happens at the boundary, in <code>Api.hs</code>, where the constructor <em>maps</em> to a string — but that mapping is itself one function, written once, and any new constructor that lacks a string mapping is an exhaustiveness warning.</p>
+<h3 id="footgun-6-validator-throws-on-first-failure">Footgun 6 — Validator throws on first failure</h3>
+<p><strong>Representable in Haskell?</strong> Yes, but the codebase doesn&#x27;t.</p>
+<p>You <em>could</em> throw via <code>error &quot;bad row&quot;</code>. The community treats that as a code smell; the natural shape is to return a list:</p>
+<pre><code class="language-haskell">validationErrors :: ValidationConfig -&gt; ParsedFuelRow -&gt; [ValidationError]
+validationErrors config row =
+  quantityErrors &lt;&gt; amountErrors &lt;&gt; odometerErrors</code></pre>
+<p><code>[ValidationError]</code> — a list of typed errors, accumulated. Each check returns either <code>[]</code> or a single-element list; they concatenate. The caller gets every error the row produced, not just the first.</p>
+<p>Not enforced by the type system — you <em>could</em> throw — but the language steers you the other way. Exceptions are clumsy; <code>Either e a</code> and lists are easy.</p>
+<h3 id="footgun-7-switch-without-a-default">Footgun 7 — <code>switch</code> without a default</h3>
+<p><strong>Representable in Haskell?</strong> No.</p>
+<p>There is no &quot;default-less switch&quot; because there&#x27;s only <code>case</code>, and <code>case</code> is always checked by <code>-Wincomplete-uni-patterns</code>. Every constructor must be handled or the build warns. With <code>-Werror</code>, the build fails.</p>
+<p>The <code>Summary.hs</code> <code>summarizeRows</code> function is the proof:</p>
+<pre><code class="language-haskell">addDecision decision summary =
+  case decision of
+    Accepted _ -&gt; countAccepted summary
+    AcceptedWithWarnings _ _ -&gt; countAcceptedWithWarnings summary
+    Quarantined _ _ -&gt; countQuarantined summary
+    SkippedDuplicate _ -&gt; countSkipped summary
+    Rejected _ -&gt; countRejected summary
+    Fatal _ -&gt; countFatal summary</code></pre>
+<p>No default. No fallthrough. No <code>_ -&gt; error &quot;unknown&quot;</code>. If a seventh constructor were added, every <code>case</code> like this in the codebase would warn, the build would fail, and the missing branches would be enumerated by the compiler.</p>
+<h3 id="scorecard">Scorecard</h3>
+<div class="table-wrap"><table><thead><tr><th>#</th><th>Footgun</th><th>Normal C#</th><th>Idiomatic C#</th><th>F#</th><th>Haskell</th></tr></thead><tbody><tr><td>1</td><td>NRE in logger</td><td>possible</td><td>partial (NRT opt-in)</td><td>partial</td><td><strong>impossible</strong> (IO not in signature)</td></tr><tr><td>2</td><td>Case-sensitive mode</td><td>possible</td><td>enum</td><td>DU</td><td><strong>closed sum type</strong></td></tr><tr><td>3</td><td>Missing recovery branch</td><td>possible</td><td>expression warn</td><td>match warn</td><td><code>case</code> warn + Werror</td></tr><tr><td>4</td><td>Mutable response</td><td>possible</td><td>IReadOnlyList view</td><td>immutable default</td><td><strong>no mutability without IORef/IO</strong></td></tr><tr><td>5</td><td>Status typo</td><td>possible</td><td>sealed record per case</td><td>DU case</td><td><strong>constructor name</strong></td></tr><tr><td>6</td><td>Validator throws first</td><td>possible</td><td>accumulate</td><td>accumulate</td><td>accumulate (Either/list idiom)</td></tr><tr><td>7</td><td>Switch no default</td><td>possible</td><td>expression warn</td><td>match warn</td><td><code>case</code> warn + Werror</td></tr></tbody></table></div>
+<p>Seven for seven. Either the type cannot represent the bug at all, or the compiler refuses the build when it can.</p>
+<h2 id="the-multiplier-property-tests">The multiplier: property tests</h2>
+<p>Algebraic types and property tests are made for each other. The constructors <em>are</em> the cases your test needs to cover; generating a random <code>RowDecision</code> means picking a constructor uniformly and filling its payload with random data. <strong>QuickCheck</strong> is the library that does this.</p>
+<p>A property test, briefly: instead of writing one example case (<code>testThatTotalIsThreeWhenWeHaveThreeRows</code>), you state a property that should hold for <em>any</em> input, and let QuickCheck generate ~100 random inputs and check the property on each. If any input violates the property, QuickCheck shrinks it down to a minimal counterexample and reports it.</p>
+<p>Here&#x27;s the property test for batch summary totals (<code>test/FuelUpload/Properties.hs</code>):</p>
+<pre><code class="language-haskell">prop &quot;summary total is the number of row decisions&quot; \(Decisions decisions) -&gt;
+  summaryTotalRows (summarizeRows decisions) == length decisions
+
+prop &quot;summary count partitions always add up to total&quot; \(Decisions decisions) -&gt;
+  let summary = summarizeRows decisions
+   in summaryAccepted summary
+        + summaryQuarantined summary
+        + summarySkippedDuplicates summary
+        + summaryRejected summary
+        + summaryFatal summary
+        == summaryTotalRows summary</code></pre>
+<p>Two statements, each backed by 100 random batches of decisions:</p>
+<ol><li>The summary total equals the number of decisions. Always.</li><li>The per-outcome counts partition the total. Always.</li></ol>
+<p>The <code>Arbitrary</code> instance generates random <code>RowDecision</code>s by picking a constructor:</p>
+<pre><code class="language-haskell">arbitraryDecision :: Gen RowDecision
+arbitraryDecision =
+  oneof
+    [ Accepted &lt;$&gt; arbitraryTransaction
+    , AcceptedWithWarnings &lt;$&gt; arbitraryTransaction &lt;*&gt; arbitraryWarnings
+    , Quarantined &lt;$&gt; arbitraryTransaction &lt;*&gt; arbitraryQuarantineReasons
+    , SkippedDuplicate &lt;$&gt; arbitrarySkippedDuplicate
+    , Rejected &lt;$&gt; arbitraryRejectedRow
+    , Fatal &lt;$&gt; arbitraryFatalError
+    ]</code></pre>
+<p>The shape of this generator <em>mirrors</em> the shape of the type. Six constructors in the type, six branches in the generator. When you add a seventh constructor (chapter 7&#x27;s hypothetical <code>DeferredForManualReview</code>), this generator becomes incomplete — and the existing properties keep passing only on the cases they cover, no longer exercising the new one. You don&#x27;t get false confidence; you get pressure to add the seventh branch to the generator too.</p>
+<p>Here&#x27;s a third property that demonstrates the &quot;laws as constructor properties&quot; point:</p>
+<pre><code class="language-haskell">prop &quot;fatal row decisions block the batch&quot; \(NonEmptyFatalContexts contexts) -&gt;
+  case batchOutcome (classifyBatch defaultConfig Normal contexts) of
+    BatchBlockedByFatal _ -&gt; property True
+    BatchUploadable -&gt; counterexample &quot;expected fatal to block batch&quot; False</code></pre>
+<p>Read: for any batch of contexts that contains at least one fatal row, the batch outcome must be <code>BatchBlockedByFatal</code>. The <code>NonEmptyFatalContexts</code> generator always inserts a fatal context somewhere in the batch, then asserts the outcome.</p>
+<p>This isn&#x27;t testing one example. It&#x27;s testing the rule. Domain rule 7 from CLAUDE.md (&quot;fatal errors block the entire batch&quot;) <em>is</em> this property. The test is the rule&#x27;s executable statement.</p>
+<h2 id="what-the-type-system-covers-vs-what-the-tests-cover">What the type system covers vs. what the tests cover</h2>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart LR
+  subgraph CS[&quot;Normal C#&quot;]
+    CST[&quot;Types: ~10%&quot;]
+    CSP[&quot;Tests: ~30%&quot;]
+    CSR[&quot;Runtime: the rest&quot;]
+    CST --&gt; CSP --&gt; CSR
+  end
+  subgraph FS[&quot;F#&quot;]
+    FST[&quot;Types: ~70%&lt;br/&gt;(sum types, exhaustiveness, no null)&quot;]
+    FSP[&quot;Tests: ~20%&quot;]
+    FSR[&quot;Runtime: ~10%&quot;]
+    FST --&gt; FSP --&gt; FSR
+  end
+  subgraph HS[&quot;Haskell&quot;]
+    HST[&quot;Types: ~90%&lt;br/&gt;(above + NonEmpty + IO purity)&quot;]
+    HSP[&quot;Property tests: ~9%&quot;]
+    HSR[&quot;Runtime: ~1%&quot;]
+    HST --&gt; HSP --&gt; HSR
+  end</code></pre></figure>
+<p>Percentages are rough. The point is the <em>shift in burden</em>. In normal C# the runtime is the last-line defender. In Haskell the runtime barely catches anything because the type system caught it and (where types can&#x27;t reach) properties caught it.</p>
+<h2 id="is-it-easier-or-harder-to-read">Is it easier or harder to read?</h2>
+<p>Honest answer: harder up front, easier once you can.</p>
+<p>Steeper learning curve than F# (already steeper than C#). The primer in chapter 7 is enough to read the domain code, but Haskell in the wild uses applicative combinators (<code>&lt;$&gt;</code>, <code>&lt;*&gt;</code>, <code>&gt;&gt;=</code>), monad transformers, type-class machinery, GADT syntax — none of which appear in this codebase, all of which a real-world Haskell project might. The vocabulary is large.</p>
+<p>Once you can read it, the domain is more legible than at any of the lower rungs. The normal-C# <code>RowDecision</code> from chapter 2 is nine fields, four nullable, three mutable lists, six valid status strings encoded in a comment — the shape doesn&#x27;t tell you which combinations are legal. The Haskell <code>RowDecision</code> is eight lines and every constructor carries exactly what it needs, no more, no less. The shape <em>is</em> the documentation.</p>
+<h2 id="how-easy-is-it-to-extend">How easy is it to extend?</h2>
+<p>Adding a seventh <code>RowDecision</code> case, say <code>DeferredForManualReview</code>:</p>
+<pre><code class="language-haskell">data RowDecision
+  = Accepted FuelTransaction
+  | AcceptedWithWarnings FuelTransaction (NonEmpty ValidationWarning)
+  | Quarantined FuelTransaction (NonEmpty QuarantineReason)
+  | SkippedDuplicate SkippedDuplicate
+  | Rejected RejectedRow
+  | Fatal FatalError
+  | DeferredForManualReview FuelTransaction String   -- NEW
+  deriving stock (Eq, Show)</code></pre>
+<p>One line. Now run <code>cabal build</code>. Every <code>case</code> in the codebase that matches on <code>RowDecision</code> emits a <code>-Wincomplete-uni-patterns</code> warning. The compiler enumerates them:</p>
+<ul><li><code>Summary.hs</code>&#x27;s <code>addDecision</code> and <code>collectFatal</code></li><li><code>Api.hs</code>&#x27;s <code>toDecisionDto</code></li><li><code>Audit.hs</code>&#x27;s <code>projectRow</code> and <code>acceptedTransactionIds</code></li><li><code>Report.hs</code>&#x27;s <code>acceptedTransactionIds</code>, <code>rejectedRowNumbers</code>, <code>quarantinedRows</code>, <code>skippedDuplicateRowNumbers</code></li><li><code>DecisionEngine.hs</code> (only if a <code>case</code> reads <code>RowDecision</code> — here it produces them, so it&#x27;s fine)</li></ul>
+<p>With <code>-Werror</code> the build fails until each is handled. You <strong>cannot ship a half-extended codebase</strong>. The compiler has located every consumer; you fix them; you ship.</p>
+<p>Property tests are the second layer. The <code>arbitraryDecision</code> generator covers six branches today. After the change, it still covers six branches and silently ignores the seventh — the properties still pass, but on a narrower domain. The generator itself isn&#x27;t compile-checked against the constructors (there&#x27;s no &quot;exhaustive generator&quot; feature), so this is a soft signal rather than a build break. Catching it is part of the &quot;extend the generator when you extend the type&quot; discipline.</p>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart LR
+  ADD[Add DeferredForManualReview case]
+  ADD --&gt; BUILD[&quot;cabal build with -Werror&quot;]
+  BUILD --&gt; WARN[&quot;Compiler enumerates ~10 consumer sites&quot;]
+  WARN --&gt; FIX[&quot;Fix each case match&quot;]
+  FIX --&gt; PROPS[&quot;Update arbitraryDecision generator&quot;]
+  PROPS --&gt; PASS[&quot;Build green, props pass&quot;]</code></pre></figure>
+<p>Compare to normal C# where the same change is &quot;add the string &#x27;DeferredForManualReview&#x27; and hope nothing downstream needs to know.&quot; Five hops above the cliff base.</p>
+<h2 id="where-this-still-leaks">Where this still leaks</h2>
+<p>Haskell stayed the strongest reference model in the V3 scoring (<code>docs/v3-results.md</code>). The domain is tight, the property tests are real, the boundary errors are typed. The score it lost was on a single dimension: <strong>practical fit for a .NET shop</strong>.</p>
+<p>From the V3 results:</p>
+<blockquote><p>The API boundary is an in-process typed facade rather than a realistic service adapter; repository errors lose details when converted to fatal decisions; vehicle lookup lacks the ambiguous-vehicle case present in the other v3 implementations. No real serialization or .NET-friendly adapter shape emerged.</p></blockquote>
+<p>The Haskell <code>Api.hs</code> is impeccable as a type-driven mapping exercise. It parses CSV-shaped strings, accumulates typed mapping errors, and emits typed DTOs. What it isn&#x27;t, is a service that fits naturally into a C#/.NET application&#x27;s runtime — there&#x27;s no ASP.NET hosting model, no <code>System.Text.Json</code> serialisation, no DI-shaped repository client.</p>
+<p>That&#x27;s the boundary tradeoff the next part picks up. The type system on the cliff face is everything we said it was. The adapter shape that brings it into a real .NET application is — for this organisation — a separate problem, and one we revisit in <a href="../part1b/11-boundary-returns.html">Part Ib chapter 11</a>.</p>
+<p>For Part I&#x27;s narrative, though, the Haskell column is the answer to the central question: <strong>what kind of bug can the type system make unrepresentable?</strong> Seven out of seven. The cliff is real, and once you&#x27;re standing on it, the floor is a long way down.</p>
+<p><a href="09-rust-lands.html">next →</a></p>
+    </article>
+    <footer class="pager">
+      <a class="pager-prev" href="07-haskell-primer.html">Previous: A Haskell primer for C# developers</a>
+      <a class="pager-next" href="09-rust-lands.html">Next: Rust: a different goal, the same place</a>
+    </footer>
+  </main>
+</body>
+</html>

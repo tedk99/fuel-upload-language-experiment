@@ -1,0 +1,26 @@
+services:
+  book-static:
+    build:
+      context: .
+      dockerfile: Dockerfile.book
+    image: fuel-book-jupyter:latest
+    container_name: fuel-book-static
+    command: ["python", "-m", "http.server", "8000", "--directory", "docs/book"]
+    ports:
+      - "${BOOK_STATIC_BIND:-0.0.0.0}:${BOOK_STATIC_PORT:-8898}:8000"
+    restart: unless-stopped
+
+  book-jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile.book
+    image: fuel-book-jupyter:latest
+    container_name: fuel-book-jupyter
+    command: ["bash", "tools/serve_quarto_book_jupyter.sh", "--static", "--host", "0.0.0.0", "--port", "8888"]
+    environment:
+      JUPYTER_BOOK_VENV: /opt/book-jupyter-venv
+      OPEN_BROWSER: "0"
+      RENDER_MODE: static
+    ports:
+      - "${BOOK_JUPYTER_BIND:-127.0.0.1}:${BOOK_JUPYTER_PORT:-8899}:8888"
+    restart: unless-stopped

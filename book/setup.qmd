@@ -38,6 +38,13 @@ Install pointers:
 - **GHC + cabal** — easiest via [GHCup](https://www.haskell.org/ghcup/)
 - **Rust** — `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 
+## Reading this book without Quarto
+
+The repository includes a pre-rendered static reader at
+`docs/book/index.html`. Open that file in a browser if you only want to read
+the book; no Quarto, Jupyter kernels, language toolchains, or headless Chrome
+are needed.
+
 ## Rendering this book
 
 The book is built with [Quarto](https://quarto.org). To re-render it:

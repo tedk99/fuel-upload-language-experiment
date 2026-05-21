@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mutability and identity - Blub &amp; Fuel</title>
+  <link rel="stylesheet" href="../book.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="book-title" href="../index.html">Blub &amp; Fuel</a>
+    <nav><ol><li><a href="../index.html">Blub &amp; Fuel</a></li><li><a href="../setup.html">Setup</a></li><li><a href="../part1/01-blub-paradox.html">The Blub Paradox</a></li><li><a href="../part1/02-normal-csharp-tour.html">Tour: the normal C# fuel engine</a></li><li><a href="../part1/03-seven-footguns.html">Seven footguns</a></li><li><a href="../part1/04-idiomatic-csharp.html">Idiomatic C#: same language, modern features on</a></li><li><a href="../part1/05-fsharp-native.html">F#: leaving C# behind</a></li><li><a href="../part1/06-fsharp-interop.html">F# interop: where the domain meets C#</a></li><li><a href="../part1/07-haskell-primer.html">A Haskell primer for C# developers</a></li><li><a href="../part1/08-haskell-safety.html">Haskell: making the bug unrepresentable</a></li><li><a href="../part1/09-rust-lands.html">Rust: a different goal, the same place</a></li><li><a href="../part1/10-the-punch.html">The punch: what each rung made impossible</a></li><li><a href="../part1b/11-boundary-returns.html">The boundary returns</a></li><li><a href="../part1b/12-boundary-side-by-side.html">Four engines at the boundary</a></li><li><a href="../part1b/13-final-takeaway.html">The final takeaway</a></li><li><a href="r1-decision.html">Modelling the row decision</a></li><li><a href="r2-validation.html">Validation and warnings</a></li><li><a href="r3-recovery.html">Duplicate / recovery policy</a></li><li><a href="r4-boundary.html">The boundary</a></li><li><a href="r5-exhaustiveness.html">Exhaustiveness</a></li><li><a href="r6-mutability.html" aria-current="page" class="active">Mutability and identity</a></li><li><a href="r7-null.html">Null and absence</a></li><li><a href="../references.html">references</a></li></ol></nav>
+  </aside>
+  <main>
+    <header class="page-header">
+      <p class="kicker">Static reader</p>
+      <h1>Mutability and identity</h1>
+      <p class="source-link">Generated from <a href="../../../book/part2/r6-mutability.qmd">part2/r6-mutability.qmd</a>.</p>
+    </header>
+    <article>
+      <h2 id="where-mutation-lives">Where mutation lives</h2>
+<p>A pure decision engine <strong>should not</strong> mutate domain values. The classifier is a function from input to output; it has no business reaching back into a row and rewriting fields. But &quot;should not&quot; is the social contract. What does the language enforce?</p>
+<p>The question is: starting from a fresh <code>RowDecision</code>, can a consumer <em>assign a field</em>? Can the engine itself mutate a list while building the answer? Where in the codebase is mutation actually expressed?</p>
+<h2 id="normal-c-pocos-with-public-setters">Normal C# — POCOs with public setters</h2>
+<pre><code class="language-csharp">// normalcsharp-fuel-engine/src/FuelUploadEngine/Models/FuelRow.cs
+public class FuelRow
+{
+    public int RowNumber { get; set; }
+    public string VehicleRef { get; set; }
+    public string SourceId { get; set; }
+    public DateTime OccurredOn { get; set; }
+    public decimal QuantityLiters { get; set; }
+    public decimal TotalCost { get; set; }
+    public string MerchantName { get; set; }
+    public int Odometer { get; set; }
+}</code></pre>
+<p>Public <code>get; set;</code> on every field. The <code>RowDecision</code> class is the same — <code>RowNumber</code> and <code>Status</code> are even <em>fields</em>, not properties. Any caller can write:</p>
+<pre><code class="language-csharp">decision.Status = &quot;Accepted&quot;;
+decision.Errors.Add(&quot;LateBindingFun&quot;);</code></pre>
+<p>Inside the service, the engine does exactly this — building up the decision by mutating a fresh instance:</p>
+<pre><code class="language-csharp">var decision = new RowDecision();
+decision.RowNumber = input.RowNumber;
+// ...
+decision.Status = &quot;Rejected&quot;;
+decision.Errors.Add(vex.Message);</code></pre>
+<p>The lists are also mutable. <code>List&lt;string&gt; Warnings</code> is exposed directly; the caller could <code>.Clear()</code> it after the fact.</p>
+<p>What this means: mutation is the <strong>default modelling tool</strong>. There is no syntactic distance between &quot;compute a value&quot; and &quot;assign a field on a partially-built record.&quot; The engine and its consumers share the same dialect.</p>
+<h2 id="idiomatic-c-records-with-init-ireadonlylist-t">Idiomatic C# — records with <code>init</code>, <code>IReadOnlyList&lt;T&gt;</code></h2>
+<pre><code class="language-csharp">public sealed record AcceptedTransaction(FuelTransaction Transaction) : RowDecision;
+
+public sealed record QuarantinedRow : RowDecision
+{
+    public RowNumber RowNumber { get; }       // get-only
+    public FuelTransaction Transaction { get; }
+    public IReadOnlyList&lt;QuarantineReason&gt; Reasons { get; }
+    public IReadOnlyList&lt;UploadWarning&gt; Warnings { get; }
+}</code></pre>
+<p>Positional record syntax compiles to <code>init</code>-only properties — set once in the constructor, immutable after that. Collections are exposed as <code>IReadOnlyList&lt;T&gt;</code>, which prevents the consumer from calling <code>.Add(...)</code> on the list <strong>through that interface</strong>. (The backing <code>List&lt;T&gt;</code> is still mutable; an <code>Unsafe</code>-style cast can find it, but the type signature says don&#x27;t.)</p>
+<p>The engine constructs the decision once, from immutable arguments, and hands the value off. There is no <code>decision.Status = ...</code> step. Code that wants a &quot;modified&quot; decision must construct a new record:</p>
+<pre><code class="language-csharp">var withMoreWarnings = quarantined with { Warnings = newList };</code></pre>
+<p>The <code>with</code>-expression copies the record and lets you override specific fields, returning a new instance. This is the language admitting that immutable data needs an ergonomic update mechanism; you don&#x27;t have to write the copy by hand.</p>
+<p>Cost: nothing in the type system stops you from declaring a record with a <code>set</code> instead of <code>init</code>, or from using <code>class</code> instead of <code>record</code>. Immutability in idiomatic C# is a <strong>convention enforced by code review</strong>, not by the language. It&#x27;s strong enough to be load-bearing in this codebase, but it could be circumvented in a single PR by an unaware author.</p>
+<h2 id="f-immutable-by-default-climutable-is-the-opt-out">F# — immutable by default, <code>[&lt;CLIMutable&gt;]</code> is the opt-out</h2>
+<pre><code class="language-fsharp">type AcceptedTransaction =
+    { TransactionId: string
+      SourceRowNumber: int
+      Vehicle: Vehicle
+      OccurredAt: DateTimeOffset
+      OdometerMiles: decimal
+      FuelVolumeGallons: decimal
+      TotalCost: decimal
+      MerchantName: string
+      ExternalReference: string
+      Mode: UploadMode }</code></pre>
+<p>F# records are immutable. Period. You cannot write <code>tx.TransactionId &lt;- &quot;new&quot;</code> — the language refuses. The way to &quot;modify&quot; is the copy-with-override:</p>
+<pre><code class="language-fsharp">let updated = { tx with MerchantName = &quot;Updated Inc&quot; }</code></pre>
+<p>This is the same idea as C#&#x27;s <code>with</code>-expression, but it&#x27;s been the F# default since 2005 — not a feature retrofit. Lists are immutable too (<code>&#x27;a list</code> is a linked list of immutable cons cells); mutation is only available through explicit <code>ResizeArray&lt;&#x27;T&gt;</code> or <code>array</code> types, which the domain modules don&#x27;t use.</p>
+<p>The one place mutation re-enters is <code>[&lt;CLIMutable&gt;]</code>:</p>
+<pre><code class="language-fsharp">[&lt;CLIMutable&gt;]
+type FuelUploadRowDto =
+    { RowNumber: int
+      VehicleKey: string
+      /* ... */ }</code></pre>
+<p>This attribute tells the compiler to <em>also emit</em> a parameterless constructor and writable setters in the IL. The F# code still sees an immutable record — you cannot assign through F# — but a C# consumer (or a JSON deserialiser) <strong>can</strong> instantiate it as a POCO and write to its fields. It&#x27;s the only mutation seam in F# domain code, and it&#x27;s there strictly for interop. See <a href="r4-boundary.html">the boundary</a> and <a href="r7-null.html">null</a> for what this opens up.</p>
+<h2 id="haskell-immutable-everywhere">Haskell — immutable everywhere</h2>
+<pre><code class="language-haskell">data FuelTransaction = FuelTransaction
+  { transactionId :: TransactionId
+  , transactionRowNumber :: RowNumber
+  , transactionVehicleId :: VehicleId
+  , transactionExternalRowId :: ExternalRowId
+  , transactionQuantity :: FuelQuantity
+  , transactionAmount :: MoneyAmount
+  , transactionOdometer :: OdometerReading
+  }
+  deriving stock (Eq, Show)</code></pre>
+<p>Haskell doesn&#x27;t have mutation in the value language. <code>transaction { transactionId = newId }</code> is record update syntax — it produces a new value. There is no <code>&lt;-</code> for assignment outside <code>do</code>-notation in mutable monads (<code>IO</code>, <code>ST</code>, <code>STRef</code>), and the decision engine touches none of those.</p>
+<p>Lists, maps, trees — all persistent immutable structures by default. There is no <code>[&lt;CLIMutable&gt;]</code> equivalent because there is no .NET runtime to interop with. The whole domain layer is mutation-free by construction.</p>
+<p>The cost shows up in only one place — performance — and only for truly hot inner loops, which the classifier isn&#x27;t. For a batch decision engine, &quot;always immutable&quot; is the right default and has zero ergonomic cost. The runtime&#x27;s persistent data structures share structure between updates; a copy-with-override is O(log n) for typical containers, not O(n).</p>
+<h2 id="rust-ownership-mut-is-explicit-and-tracked">Rust — ownership; <code>&amp;mut</code> is explicit and tracked</h2>
+<pre><code class="language-rust">pub struct FuelTransaction {
+    pub transaction_id: TransactionId,
+    pub row_number: RowNumber,
+    pub source_id: SourceRowId,
+    pub vehicle_id: VehicleId,
+    pub occurred_on: FuelDate,
+    pub quantity_liters: f64,
+    pub total_cost: f64,
+    pub unit_cost: f64,
+    pub odometer: OdometerReading,
+    pub merchant: Merchant,
+}</code></pre>
+<p>Rust fields are public-by-name and writable — but only through an <strong>owned binding</strong> or an <code>&amp;mut</code> reference. The borrow checker enforces that you can never have two writers, never have a writer while anyone else is reading, and never let a writable reference outlive the thing it points into. Mutation exists in the language; what&#x27;s missing is <em>unconstrained</em> mutation.</p>
+<p>The engine uses <code>Vec&lt;RowDecision&gt;</code> internally and <code>push</code>es to it as it classifies — mutation, but local. The classifier function takes its inputs by reference (<code>&amp;[RowInput]</code>) and produces an owned <code>BatchDecision</code>. Nobody outside the function sees the in-progress vector; the moment it&#x27;s returned, the borrow checker hands ownership to the caller and the source can no longer touch it.</p>
+<pre><code class="language-rust">pub fn classify_batch(
+    rows: &amp;[RowInput],
+    mode: UploadMode,
+    config: &amp;ValidationConfig,
+) -&gt; BatchDecision { /* mutate locally, return owned */ }</code></pre>
+<p>So Rust is &quot;mutable where useful, immutable everywhere else, with the borrow checker policing the seam.&quot; Practically the engine&#x27;s mutation is invisible to the caller. The contract is <em>as if</em> the function were pure.</p>
+<h2 id="the-mutation-gradient">The mutation gradient</h2>
+<div class="table-wrap"><table><thead><tr><th>Engine</th><th>Default mutability</th><th>Opt-in / opt-out</th><th>Where mutation lives in the engine</th></tr></thead><tbody><tr><td>normal C#</td><td>mutable everything</td><td>n/a</td><td>service mutates the in-progress <code>RowDecision</code>, consumers may continue mutating</td></tr><tr><td>idiomatic C#</td><td>immutable record by convention</td><td><code>init</code> vs <code>set</code> is the dial</td><td>construction-time only, via <code>with</code>-expressions</td></tr><tr><td>F#</td><td>immutable by default</td><td><code>[&lt;CLIMutable&gt;]</code> for CLR interop</td><td>nowhere in the domain; only DTOs</td></tr><tr><td>Haskell</td><td>no mutation in the value language</td><td><code>IORef</code>/<code>STRef</code> exist; not used here</td><td>nowhere</td></tr><tr><td>Rust</td><td>mutable by <code>let mut</code>, controlled by ownership</td><td><code>&amp;mut</code> references, borrow-checked</td><td>inside the classifier; invisible to caller</td></tr></tbody></table></div>
+<p>The shape that matters here is <strong>where the consumer can write</strong>. Normal C# lets the consumer write to a returned decision; nothing about the type prevents it. Every other engine on the ladder makes &quot;a returned decision is final&quot; a guarantee of the type — either by making mutation impossible (F#, Haskell), or by making mutation require an explicit borrow that the caller has to ask for (Rust), or by hiding the mutable list behind a read-only interface (idiomatic C#).</p>
+<p>That matters because the audit trail in this domain is the decision list itself. If a consumer can rewrite a <code>RowDecision</code> after the classifier returned it, the audit trail isn&#x27;t.</p>
+    </article>
+    <footer class="pager">
+      <a class="pager-prev" href="r5-exhaustiveness.html">Previous: Exhaustiveness</a>
+      <a class="pager-next" href="r7-null.html">Next: Null and absence</a>
+    </footer>
+  </main>
+</body>
+</html>

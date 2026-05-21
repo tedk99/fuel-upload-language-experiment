@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Four engines at the boundary - Blub &amp; Fuel</title>
+  <link rel="stylesheet" href="../book.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="book-title" href="../index.html">Blub &amp; Fuel</a>
+    <nav><ol><li><a href="../index.html">Blub &amp; Fuel</a></li><li><a href="../setup.html">Setup</a></li><li><a href="../part1/01-blub-paradox.html">The Blub Paradox</a></li><li><a href="../part1/02-normal-csharp-tour.html">Tour: the normal C# fuel engine</a></li><li><a href="../part1/03-seven-footguns.html">Seven footguns</a></li><li><a href="../part1/04-idiomatic-csharp.html">Idiomatic C#: same language, modern features on</a></li><li><a href="../part1/05-fsharp-native.html">F#: leaving C# behind</a></li><li><a href="../part1/06-fsharp-interop.html">F# interop: where the domain meets C#</a></li><li><a href="../part1/07-haskell-primer.html">A Haskell primer for C# developers</a></li><li><a href="../part1/08-haskell-safety.html">Haskell: making the bug unrepresentable</a></li><li><a href="../part1/09-rust-lands.html">Rust: a different goal, the same place</a></li><li><a href="../part1/10-the-punch.html">The punch: what each rung made impossible</a></li><li><a href="11-boundary-returns.html">The boundary returns</a></li><li><a href="12-boundary-side-by-side.html" aria-current="page" class="active">Four engines at the boundary</a></li><li><a href="13-final-takeaway.html">The final takeaway</a></li><li><a href="../part2/r1-decision.html">Modelling the row decision</a></li><li><a href="../part2/r2-validation.html">Validation and warnings</a></li><li><a href="../part2/r3-recovery.html">Duplicate / recovery policy</a></li><li><a href="../part2/r4-boundary.html">The boundary</a></li><li><a href="../part2/r5-exhaustiveness.html">Exhaustiveness</a></li><li><a href="../part2/r6-mutability.html">Mutability and identity</a></li><li><a href="../part2/r7-null.html">Null and absence</a></li><li><a href="../references.html">references</a></li></ol></nav>
+  </aside>
+  <main>
+    <header class="page-header">
+      <p class="kicker">Static reader</p>
+      <h1>Four engines at the boundary</h1>
+      <p class="source-link">Generated from <a href="../../../book/part1b/12-boundary-side-by-side.qmd">part1b/12-boundary-side-by-side.qmd</a>.</p>
+    </header>
+    <article>
+      <h2 id="the-same-four-problems-four-times">The same four problems, four times</h2>
+<p><a href="11-boundary-returns.html">Chapter 11</a> named the four V3 boundary concerns: CSV-shaped import, repository ports, audit projection, operational batch report. This chapter walks all four of them through all four V3 engines — C#, F#, Haskell, Rust — with real code from each implementation and an honest verdict on each cell of the grid.</p>
+<p>We are no longer asking <em>can the language model the domain?</em> All four can. We are asking <em>can the language hold the boundary?</em></p>
+<p>That question lands differently in each language. F# wins on the combined picture. C# wins on practical fit. Haskell still has the most algebraic shape but feels academic. Rust is disciplined but adds friction. The V2 ranking does not survive the boundary; the rest of this chapter shows you why.</p>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart LR
+    subgraph V2[V2: domain only]
+        V2C[C#]
+        V2F[F#]
+        V2H[Haskell]
+        V2R[Rust]
+    end
+    subgraph V3[V3: domain + boundary]
+        V3F[F#]
+        V3C[C#]
+        V3H[Haskell]
+        V3R[Rust]
+    end
+    V2 --&gt; V3</code></pre></figure>
+<p>The reorder is not noise. It is the lesson.</p>
+<h2 id="csv-shaped-import">CSV-shaped import</h2>
+<p>The first boundary is parsing. Already-tokenised CSV cells arrive as string-shaped DTOs with every cell optional. The mapper has to produce either a typed application request or a list of typed import errors.</p>
+<h3 id="c-typed-errors-repeated-parsing-branches">C#: typed errors, repeated parsing branches</h3>
+<p>C# models the inputs as record types with nullable strings, and the import errors as a sealed sum:</p>
+<pre><code class="language-csharp">public sealed record ImportedFuelRow(
+    string? RowNumber,
+    string? VehicleIdentifier,
+    string? TransactionDate,
+    string? Quantity,
+    string? UnitPrice,
+    /* ... eleven more nullable strings ... */);
+
+public enum FuelImportErrorCode
+{
+    MissingRows,
+    MissingRequiredCell,
+    InvalidNumber,
+    InvalidDate,
+    InvalidUploadMode,
+    InvalidBoolean
+}
+
+public sealed record FuelImportError(
+    FuelImportErrorCode Code,
+    string Field,
+    string Detail);</code></pre>
+<p>The mapping function accumulates a list of errors and returns either a <code>Success</code> or a <code>Failure</code>:</p>
+<pre><code class="language-csharp">public static FuelImportMapResult&lt;FuelUploadRequestDto&gt; ToApplicationRequest(
+    ImportBatchRequest request)
+{
+    var errors = new List&lt;FuelImportError&gt;();
+    var uploadMode = ParseUploadMode(request.UploadMode, &quot;uploadMode&quot;, errors);
+    var maximumQuantity = ParseDecimal(request.MaximumQuantity, &quot;maximumQuantity&quot;, errors);
+    /* ... eight more parses, each appending to errors ... */
+
+    if (errors.Count &gt; 0 || uploadMode is null || /* eight null checks */)
+    {
+        return new FuelImportMapResult&lt;FuelUploadRequestDto&gt;.Failure(errors);
+    }
+    return new FuelImportMapResult&lt;FuelUploadRequestDto&gt;.Success(/* ... */);
+}</code></pre>
+<p>This works. The errors are typed. The strings stay outside the domain. But the code shape is <em>repeated parsing branches</em> — each parser writes the same <code>if value is null { add error; return null; }</code> skeleton. The V3 audit called this out: &quot;import and mapping code repeat parsing branches.&quot; It is C#-idiomatic and the most common production shape, but it does not pressure the compiler to help.</p>
+<h3 id="f-typed-errors-accumulated-through-result">F#: typed errors accumulated through <code>Result</code></h3>
+<p>F# uses the same pattern but with <code>Result</code> and lists, and the missing piece is a typed <code>FuelImportErrorCode</code> discriminated union:</p>
+<pre><code class="language-fsharp">[&lt;RequireQualifiedAccess&gt;]
+type FuelImportErrorCode =
+    | MissingRows
+    | MissingRequiredCell
+    | InvalidNumber
+    | InvalidDate
+    | InvalidUploadMode
+    | InvalidBoolean
+
+let private parseImportDate field value =
+    match requireCell field value with
+    | Error errors -&gt; Error errors
+    | Ok value -&gt;
+        match DateTimeOffset.TryParse(value) with
+        | true, parsed -&gt; Ok parsed
+        | false, _ -&gt;
+            Error [ importError FuelImportErrorCode.InvalidDate field &quot;...&quot; ]</code></pre>
+<p>The shape is similar to C# — error list, pattern match for the collapse — but the F# version threads the typed result through <code>Result&lt;_, _&gt;</code> everywhere, so the <em>combine</em> step (collecting per-field errors into a per-batch list) is just list concatenation, not a manually-maintained <code>errors.Add(...)</code> list. The V3 audit&#x27;s note: &quot;the mapper accumulates typed <code>FuelImportError</code> values and hands valid rows to the existing DTO boundary.&quot;</p>
+<h3 id="haskell-either-based-and-the-most-regular">Haskell: <code>Either</code>-based and the most regular</h3>
+<p>Haskell&#x27;s import code is the most regular of the four. Each parser returns <code>Either [FuelImportError] a</code>, and the combine step is straight applicative-style pattern matching:</p>
+<pre><code class="language-haskell">data FuelImportErrorCode
+  = ImportMissingRows
+  | ImportMissingRequiredCell
+  | ImportInvalidNumber
+  | ImportInvalidDate
+  | ImportInvalidUploadMode
+  deriving stock (Eq, Show)
+
+parseImportDate :: String -&gt; String -&gt; Either [FuelImportError] String
+parseImportDate field value = do
+  required &lt;- requireImportCell field value
+  if isIsoDate required
+    then Right required
+    else Left [ importError ImportInvalidDate field &quot;Date must use yyyy-MM-dd format.&quot; ]</code></pre>
+<p>Two costs. First, <code>parseImportRational</code> round-trips through <code>Double</code> before converting to <code>Rational</code>, which is the same <code>f64</code>-leak risk Rust has. Second, the date check is shape-only (<code>isIsoDate</code> checks digits and ranges 1–12, 1–31 but does not validate calendar dates). Both are fixable; neither is fixed.</p>
+<h3 id="rust-tryfrom-impls-with-typed-errors">Rust: <code>TryFrom</code> impls with typed errors</h3>
+<p>Rust uses the same shape, but expressed through <code>TryFrom</code>:</p>
+<pre><code class="language-rust">impl TryFrom&lt;&amp;ImportBatchRequest&gt; for FuelUploadRequestDto {
+    type Error = Vec&lt;FuelImportError&gt;;
+
+    fn try_from(value: &amp;ImportBatchRequest) -&gt; Result&lt;Self, Self::Error&gt; {
+        let upload_mode = parse_import_upload_mode(value.upload_mode.as_deref(), &quot;upload_mode&quot;);
+        let suspicious_quantity = parse_required_f64(
+            value.validation.suspicious_quantity.as_deref(),
+            &quot;validation.suspicious_quantity&quot;,
+        );
+        /* ... */
+        if !errors.is_empty() { return Err(errors); }
+        Ok(Self { /* ... */ })
+    }
+}</code></pre>
+<p><code>TryFrom</code> is the idiomatic Rust spelling for &quot;boundary translation that can fail.&quot; The errors are a <code>Vec&lt;FuelImportError&gt;</code>. The concrete catch the V3 audit flagged: <code>parse_required_f64</code> returns <code>f64</code>, so monetary values cross the boundary as floats and stay that way through the domain. Rust&#x27;s enum discipline is excellent for outcomes; it does not help if the numeric primitive is wrong.</p>
+<h3 id="side-by-side">Side-by-side</h3>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart LR
+    subgraph CS[C#]
+        CSerr[FuelImportError record + enum code]
+        CSshape[mutable errors list, null-check waterfall]
+    end
+    subgraph FS[F#]
+        FSerr[FuelImportError DU + Result accumulation]
+        FSshape[error list threaded through pattern matches]
+    end
+    subgraph HS[Haskell]
+        HSerr[FuelImportError ADT + Either monad]
+        HSshape[Either-do-notation, regular and tight]
+        HSrisk[Double-then-Rational parse]
+    end
+    subgraph RS[Rust]
+        RSerr[FuelImportError enum + TryFrom]
+        RSshape[idiomatic try_from with Vec errors]
+        RSrisk[f64 for money and quantity]
+    end</code></pre></figure>
+<p>All four implement the boundary the right way at the <em>type</em> level: errors are typed, status is not a magic string. The differences live in the seams. C# and Rust hand-roll the accumulation. F# and Haskell get it from the language&#x27;s monadic combinators. Haskell and Rust both silently parse money to a float.</p>
+<h2 id="repository-ports">Repository ports</h2>
+<p>The second boundary is persistence. Vehicle lookup and duplicate history are application ports the domain consumes typed results from. The domain must not depend on a database or an HTTP client.</p>
+<h3 id="c-ports-clean-results-re-stringified">C#: ports clean, results re-stringified</h3>
+<p>C# defines the ports cleanly:</p>
+<pre><code class="language-csharp">public interface IVehicleRepository
+{
+    VehicleRepositoryResult Lookup(VehicleIdentifier identifier);
+}
+
+public interface IDuplicateRepository
+{
+    DuplicateRepositoryResult Lookup(DuplicateLookup lookup);
+}
+
+public abstract record VehicleRepositoryResult
+{
+    private VehicleRepositoryResult() { }
+    public sealed record Success(VehicleLookupResult Lookup) : VehicleRepositoryResult;
+    public sealed record Failure(VehicleRepositoryError Error) : VehicleRepositoryResult;
+}</code></pre>
+<p>So far so good. The implementation, though, takes a shortcut that the V3 audit called out specifically:</p>
+<pre><code class="language-csharp">public FuelUploadMapResult&lt;FuelUploadResponseDto&gt; Classify(FuelUploadRequestDto request)
+{
+    var rows = request.Rows?.Select(ResolveRow).ToArray();
+    var resolvedRequest = request with { Rows = rows };
+    return new FuelUploadApplicationService().Classify(resolvedRequest);
+}
+
+private FuelUploadRowDto ResolveRow(FuelUploadRowDto row)
+{
+    /* ... */
+    return row with
+    {
+        VehicleLookupStatus = VehicleLookupStatus(vehicleLookup),  // -&gt; &quot;found&quot; / &quot;not_found&quot; / &quot;ambiguous&quot;
+        VehicleId = VehicleId(vehicleLookup),
+        /* ... eight more string-typed fields ... */
+    };
+}
+
+private static string VehicleLookupStatus(VehicleRepositoryResult result)
+{
+    return result switch
+    {
+        VehicleRepositoryResult.Success { Lookup: VehicleLookupResult.Found } =&gt; &quot;found&quot;,
+        VehicleRepositoryResult.Success { Lookup: VehicleLookupResult.NotFound } =&gt; &quot;not_found&quot;,
+        VehicleRepositoryResult.Success { Lookup: VehicleLookupResult.Ambiguous } =&gt; &quot;ambiguous&quot;,
+        VehicleRepositoryResult.Success { Lookup: VehicleLookupResult.Unavailable } =&gt; &quot;unavailable&quot;,
+        VehicleRepositoryResult.Failure =&gt; &quot;unavailable&quot;,
+        _ =&gt; throw new InvalidOperationException(&quot;Unhandled vehicle repository result.&quot;)
+    };
+}</code></pre>
+<p>Read that switch carefully. The repository handed us a typed <code>VehicleLookupResult.Found</code> value. We are turning it into the string <code>&quot;found&quot;</code>, putting it back on the DTO, and then <em>re-parsing</em> the string into <code>VehicleLookupResult.Found</code> in the next mapper layer. The V3 audit:</p>
+<blockquote><p>repository-backed classification mutates a DTO-shaped row with status strings, then reuses the normal mapper. That is practical but less clean than mapping repository results directly to row context.</p></blockquote>
+<p>Practical because it re-uses the existing DTO mapper. Lossy because detail discards in the round-trip. <code>VehicleRepositoryResult.Failure</code> collapses to the same string as <code>Success { Lookup: Unavailable }</code>. The two are different in the type but indistinguishable on the DTO.</p>
+<h3 id="f-repositories-map-directly-to-domain-types">F#: repositories map directly to domain types</h3>
+<p>F# does not take that shortcut. The repository result goes straight to the typed <code>FuelRowContext</code>:</p>
+<pre><code class="language-fsharp">type IVehicleRepository =
+    abstract Lookup: vehicleKey: string -&gt; Result&lt;VehicleLookupResult, VehicleRepositoryError&gt;
+
+type IDuplicateRepository =
+    abstract Lookup: lookup: DuplicateRepositoryLookup -&gt; Result&lt;DuplicateCheckResult, DuplicateRepositoryError&gt;
+
+let private mapRepositoryRow vehicleRepository duplicateRepository index row =
+    /* ... parse occurredAt, vehicleKey, externalReference ... */
+    let vehicleLookup =
+        match vehicleRepository.Lookup vehicleKey with
+        | Ok lookup -&gt; lookup
+        | Error error -&gt; VehicleLookupResult.Fatal(FatalProcessingError.VehicleLookupUnavailable error.Detail)
+
+    let duplicateCheck =
+        match vehicleLookup with
+        | VehicleLookupResult.Fatal _ -&gt; DuplicateCheckResult.NoDuplicate
+        | _ -&gt;
+            match duplicateRepository.Lookup { RowNumber = row.RowNumber; VehicleKey = vehicleKey; ExternalReference = externalReference } with
+            | Ok lookup -&gt; lookup
+            | Error error -&gt; DuplicateCheckResult.Fatal(FatalProcessingError.DuplicateCheckUnavailable error.Detail)
+
+    Ok { Row = ...; VehicleLookup = vehicleLookup; DuplicateCheck = duplicateCheck }</code></pre>
+<p>The repository&#x27;s typed <code>Result&lt;VehicleLookupResult, _&gt;</code> reaches the domain&#x27;s typed <code>VehicleLookupResult</code> without ever passing through a status string. The V3 audit&#x27;s note: &quot;repository calls map directly to typed <code>FuelRowContext</code> values rather than going through status strings.&quot;</p>
+<h3 id="haskell-typed-and-pure-but-academic">Haskell: typed and pure, but academic</h3>
+<p>Haskell models repositories as <code>newtype</code>-wrapped function types:</p>
+<pre><code class="language-haskell">newtype VehicleRepository = VehicleRepository
+  { repositoryLookupVehicle :: Registration -&gt; Either VehicleRepositoryError VehicleLookupResult
+  }
+
+newtype DuplicateRepository = DuplicateRepository
+  { repositoryLookupDuplicate :: RepositoryDuplicateLookup -&gt; Either DuplicateRepositoryError DuplicateCheckResult
+  }
+
+mapRepositoryRow vehicleRepository duplicateRepository index dto = /* ... */
+  vehicleLookup =
+    either
+      (const (VehicleLookupFatal (VehicleLookupUnavailable number)))
+      id
+      (lookupVehicle registrationValue)</code></pre>
+<p>This is the cleanest <em>shape</em> of the four. There is no DTO round-trip, no string detour, and no IO type leakage because it is a pure function-as-record. It is also, the V3 audit honestly notes, &quot;an in-process typed facade rather than a realistic service adapter.&quot; There is no notion of async, no <code>IO</code> involvement, no dependency injection container — this is what a Haskell mathematician would write to convince another Haskell mathematician the design is right. A C# shop wiring this up to a real database would need a much bigger glue layer than the other three engines.</p>
+<p>Also: repository failures discard detail. <code>Left (VehicleRepositoryUnavailable msg)</code> becomes <code>VehicleLookupFatal (VehicleLookupUnavailable rowNumber)</code> — the message is dropped.</p>
+<h3 id="rust-traits-idiomatic-same-dto-shortcut-as-c">Rust: traits, idiomatic, same DTO shortcut as C#</h3>
+<p>Rust&#x27;s repository ports are well-shaped traits:</p>
+<pre><code class="language-rust">pub trait VehicleRepository {
+    fn lookup(&amp;self, reference: &amp;VehicleRef)
+        -&gt; Result&lt;VehicleLookupResult, VehicleRepositoryError&gt;;
+}
+
+pub trait DuplicateRepository {
+    fn lookup(&amp;self, lookup: &amp;DuplicateLookup)
+        -&gt; Result&lt;DuplicateCheckResult, DuplicateRepositoryError&gt;;
+}</code></pre>
+<p>But the application service takes the same shortcut C# took:</p>
+<pre><code class="language-rust">fn resolve_row(&amp;self, row: &amp;FuelUploadRowDto) -&gt; FuelUploadRowDto {
+    let vehicle_ref = VehicleRef(row.vehicle_ref.trim().to_string());
+    let vehicle_lookup = self.vehicle_repository.lookup(&amp;vehicle_ref);
+    let duplicate_lookup = /* ... */;
+    let mut resolved = row.clone();
+    apply_vehicle_lookup(&amp;mut resolved, vehicle_lookup);
+    apply_duplicate_lookup(&amp;mut resolved, duplicate_lookup);
+    resolved
+}
+
+fn apply_vehicle_lookup(row: &amp;mut FuelUploadRowDto, result: Result&lt;VehicleLookupResult, _&gt;) {
+    match result {
+        Ok(VehicleLookupResult::Found(vehicle)) =&gt; {
+            row.vehicle_lookup_status = &quot;found&quot;.to_string();
+            row.vehicle_id = Some(vehicle.id.0);
+            /* ... */
+        }
+        Ok(VehicleLookupResult::NotFound { .. }) =&gt; {
+            row.vehicle_lookup_status = &quot;not_found&quot;.to_string();
+            /* ... */
+        }
+        /* ... five more match arms, all writing to string fields ... */
+    }
+}</code></pre>
+<p>Same round-trip as C#. Typed result → string DTO field → re-parsed back into typed result. The V3 audit: &quot;the repository adapter converts typed repository results into string DTO fields, then parses them back into domain inputs. That mirrors C#&#x27;s shortcut and weakens the boundary.&quot;</p>
+<h3 id="side-by-side-2">Side-by-side</h3>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart TB
+    subgraph CSpath[C# path]
+        CS1[VehicleRepositoryResult.Success] --&gt; CS2[&quot;DTO.VehicleLookupStatus = #quot;found#quot;&quot;]
+        CS2 --&gt; CS3[re-parse via existing mapper]
+        CS3 --&gt; CS4[VehicleLookupResult.Found]
+    end
+    subgraph RSpath[Rust path]
+        RS1[Ok#40;VehicleLookupResult::Found#41;] --&gt; RS2[&quot;row.vehicle_lookup_status = #quot;found#quot;&quot;]
+        RS2 --&gt; RS3[re-parse via TryFrom]
+        RS3 --&gt; RS4[VehicleLookupResult::Found]
+    end
+    subgraph FSpath[F# path]
+        FS1[Ok lookup] --&gt; FS2[FuelRowContext.VehicleLookup = lookup]
+    end
+    subgraph HSpath[Haskell path]
+        HS1[Right lookup] --&gt; HS2[contextVehicleLookup = lookup]
+    end</code></pre></figure>
+<p>F# and Haskell connect typed result to typed domain input in one step. C# and Rust take a detour through strings. The detour is practical — it re-uses the existing DTO mapper — but it is also the point at which the typed repository result becomes indistinguishable from a CSV cell. <em>That</em> is where slop enters.</p>
+<h2 id="audit-projection">Audit projection</h2>
+<p>The third boundary is audit. The projector reads <code>BatchDecision</code> and emits typed audit records, with external text produced only at the last step.</p>
+<p>This is the boundary where all four implementations look most alike. Each has a typed <code>AuditEventKind</code> enum/DU/ADT, a typed <code>AuditRecord</code>, and a separate <code>AuditRecordDto</code> with strings. Each projects from <code>RowDecision</code> with exhaustive pattern matching.</p>
+<h3 id="c-enum-record-switch-with-default">C#: enum + record + switch-with-default</h3>
+<pre><code class="language-csharp">public enum AuditEventKind
+{
+    Accepted, AcceptedWithWarnings, Rejected,
+    SkippedDuplicate, Quarantined, FatalBatch
+}
+
+private static AuditRecord Project(RowDecision decision)
+{
+    return decision switch
+    {
+        RowDecision.AcceptedTransaction accepted =&gt; /* ... */,
+        RowDecision.AcceptedTransactionWithWarnings accepted =&gt; /* ... */,
+        RowDecision.QuarantinedRow quarantined =&gt; /* ... */,
+        RowDecision.SkippedDuplicate skipped =&gt; /* ... */,
+        RowDecision.RejectedRow rejected =&gt; /* ... */,
+        RowDecision.FatalProcessingError fatal =&gt; /* ... */,
+        _ =&gt; throw new ArgumentOutOfRangeException(nameof(decision), decision, &quot;Unsupported row decision.&quot;)
+    };
+}</code></pre>
+<p>The <code>_ =&gt; throw</code> arm is the C# tax. Sealed records cannot tell the compiler &quot;these are the only cases,&quot; so you get a runtime exception if a new case is added and this switch is missed. The V3 audit:</p>
+<blockquote><p>adding a new decision or repository result can miss a switch until tests hit it; sealed record switches still need default throw branches instead of compiler-enforced exhaustiveness.</p></blockquote>
+<p>It is closed by tests, not by the compiler.</p>
+<h3 id="f-discriminated-union-with-compiler-enforced-exhaustiveness">F#: discriminated union with compiler-enforced exhaustiveness</h3>
+<pre><code class="language-fsharp">let private projectClassified classified =
+    match classified.Decision with
+    | RowDecision.Accepted transaction -&gt;
+        transactionRecord AuditEventKind.Accepted [] transaction
+    | RowDecision.AcceptedWithWarnings(transaction, warnings) -&gt;
+        transactionRecord AuditEventKind.AcceptedWithWarnings warnings transaction
+    | RowDecision.Quarantined quarantined -&gt; /* ... */
+    | RowDecision.SkippedDuplicate skipped -&gt; /* ... */
+    | RowDecision.Rejected rejected -&gt; /* ... */
+    | RowDecision.Fatal fatal -&gt; /* ... */</code></pre>
+<p>No default arm. F# will refuse to compile if a new case is added and this pattern match is not updated. The V3 audit&#x27;s note: &quot;Pattern matching over <code>RowDecision</code> keeps warning, quarantine, rejection, duplicate, and fatal cases explicit.&quot;</p>
+<h3 id="haskell-same-property-even-tighter">Haskell: same property, even tighter</h3>
+<pre><code class="language-haskell">projectRow :: RowDecision -&gt; AuditRecord
+projectRow decision =
+  case decision of
+    Accepted transaction -&gt;
+      transactionRecord AuditAccepted [] [] transaction
+    AcceptedWithWarnings transaction warnings -&gt;
+      transactionRecord AuditAcceptedWithWarnings (nonEmptyToList warnings) [] transaction
+    Quarantined transaction reasons -&gt;
+      transactionRecord AuditQuarantined [] (nonEmptyToList reasons) transaction
+    SkippedDuplicate skipped -&gt; /* ... */
+    Rejected rejected -&gt; /* ... */
+    Fatal fatalError -&gt; /* ... */</code></pre>
+<p>Same compiler-enforced exhaustiveness as F#, plus the warnings and reasons are <code>NonEmpty</code> — a missing case in the projector is a compile error, an empty warnings list on <code>AcceptedWithWarnings</code> is a type error. The V3 audit: &quot;Every event is a constructor-derived projection from <code>RowDecision</code>.&quot;</p>
+<h3 id="rust-same-property-expressed-in-match">Rust: same property, expressed in <code>match</code></h3>
+<pre><code class="language-rust">fn project_row(decision: &amp;RowDecision) -&gt; AuditRecord {
+    match decision {
+        RowDecision::Accepted(transaction) =&gt; transaction_record(
+            AuditEventKind::Accepted, transaction, Vec::new(), Vec::new(),
+        ),
+        RowDecision::Warning { transaction, warnings } =&gt; transaction_record(
+            AuditEventKind::AcceptedWithWarnings,
+            transaction, warnings.clone(), Vec::new(),
+        ),
+        RowDecision::Quarantined { transaction, reasons, warnings } =&gt; /* ... */,
+        RowDecision::SkippedDuplicate(skipped) =&gt; /* ... */,
+        RowDecision::Rejected(rejected) =&gt; /* ... */,
+        RowDecision::Fatal(fatal) =&gt; /* ... */,
+    }
+}</code></pre>
+<p>Same compiler-enforced exhaustiveness as F# and Haskell. The DTO output uses <code>format!(&quot;{warning:?}&quot;)</code> debug formatting, which the V3 audit flagged — debug output is not a stable contract — but the projection itself is honest.</p>
+<h3 id="the-audit-cell">The audit cell</h3>
+<p>The audit boundary is where the four engines are most alike. All four get the <em>typed-internal/string-external</em> split right. The single distinguishing concern is <strong>does the compiler force you to update the projection when a new <code>RowDecision</code> case is added?</strong> F#, Haskell, and Rust say yes. C# requires a runtime <code>_ =&gt; throw</code> and a test that hits the new case.</p>
+<h2 id="operational-batch-report">Operational batch report</h2>
+<p>The fourth boundary is the ops report. All four engines derive the report from <code>BatchDecision</code>, not from a separate counter. That is the V2 lesson holding. The interesting question is <strong>how each handles the &quot;fatal batch → suppress uploaded transaction IDs&quot; case</strong>.</p>
+<h3 id="c-imperative-if-on-status">C#: imperative <code>if</code> on status</h3>
+<pre><code class="language-csharp">public static OperationalBatchReport Project(BatchDecision decision)
+{
+    var status = decision.HasFatalErrors ? OperationalBatchStatus.Fatal : OperationalBatchStatus.Ready;
+    var uploadedTransactionIds = status == OperationalBatchStatus.Fatal
+        ? Array.Empty&lt;TransactionKey&gt;()
+        : decision.RowDecisions
+            .Select(UploadedTransactionId)
+            .OfType&lt;TransactionKey&gt;()
+            .ToArray();
+    /* ... */
+}</code></pre>
+<p>Correct: when the batch is fatal, uploaded IDs are empty. The check is imperative — <code>if status == Fatal</code> — and depends on the boolean <code>HasFatalErrors</code> derived from the decision. It works, but the compiler does not enforce the suppression rule.</p>
+<h3 id="f-pattern-match-on-batchdecision">F#: pattern match on <code>BatchDecision</code></h3>
+<pre><code class="language-fsharp">let project decision =
+    let rows = rowsOf decision
+    let status = statusOf decision
+
+    let uploadedTransactionIds =
+        if status = OperationalBatchStatus.Fatal then
+            []
+        else
+            rows
+            |&gt; List.choose (fun classified -&gt;
+                match classified.Decision with
+                | RowDecision.Accepted transaction
+                | RowDecision.AcceptedWithWarnings(transaction, _) -&gt; Some transaction.TransactionId
+                | RowDecision.Quarantined _
+                | RowDecision.SkippedDuplicate _
+                | RowDecision.Rejected _
+                | RowDecision.Fatal _ -&gt; None)</code></pre>
+<p>Same imperative shape as C#, but the inner <code>match</code> is compiler-enforced exhaustive. The status itself comes from a DU pattern match on <code>BatchDecision.Ready</code> vs <code>BatchDecision.Blocked</code>.</p>
+<h3 id="haskell-status-and-fatal-errors-come-from-one-case">Haskell: status and fatal-errors come from one <code>case</code></h3>
+<pre><code class="language-haskell">projectOperationalReport decision =
+  OperationalBatchReport
+    { operationalStatus = status
+    , operationalCounts = batchSummary decision
+    , operationalUploadedTransactionIds =
+        case status of
+          OperationalReady -&gt; acceptedTransactionIds (batchRows decision)
+          OperationalFatal -&gt; []
+    , /* ... */
+    }
+  where
+    (status, fatalErrors) =
+      case batchOutcome decision of
+        BatchUploadable -&gt; (OperationalReady, [])
+        BatchBlockedByFatal errors -&gt; (OperationalFatal, nonEmptyToList errors)</code></pre>
+<p>Status and fatal-error list are derived in one pattern match from <code>batchOutcome</code>. Hard to drift. The V3 audit: &quot;It derives from <code>BatchDecision</code>, uses existing summary data, and models fatal status explicitly.&quot;</p>
+<h3 id="rust-pattern-match-on-batchdecision">Rust: pattern match on <code>BatchDecision</code></h3>
+<pre><code class="language-rust">pub fn project_operational_report(decision: &amp;BatchDecision) -&gt; OperationalBatchReport {
+    let status = match decision {
+        BatchDecision::Ready { .. } =&gt; OperationalBatchStatus::Ready,
+        BatchDecision::Blocked { .. } =&gt; OperationalBatchStatus::Fatal,
+    };
+
+    let uploaded_transaction_ids = if status == OperationalBatchStatus::Fatal {
+        Vec::new()
+    } else {
+        decision.rows().iter()
+            .filter_map(|row| match row {
+                RowDecision::Accepted(transaction) | RowDecision::Warning { transaction, .. } =&gt;
+                    Some(transaction.transaction_id.clone()),
+                RowDecision::Quarantined { .. }
+                | RowDecision::SkippedDuplicate(_)
+                | RowDecision::Rejected(_)
+                | RowDecision::Fatal(_) =&gt; None,
+            })
+            .collect()
+    };
+    /* ... */
+}</code></pre>
+<p>The outer status is exhaustive <code>match</code>. The inner suppression is <code>if status == Fatal</code>. Same pattern as F#, same compiler-enforced exhaustiveness on the inner match.</p>
+<h3 id="the-report-cell">The report cell</h3>
+<p>This boundary is where derivation-from-decisions discipline matters most — and where all four engines passed the audit. The differences are stylistic:</p>
+<ul><li><strong>C#</strong> uses <code>decision.HasFatalErrors</code> and <code>if</code> checks.</li><li><strong>F#</strong> uses exhaustive <code>match</code> on inner row decision, <code>if</code> on status.</li><li><strong>Haskell</strong> uses one <code>case</code> on <code>batchOutcome</code> to derive status and fatal list together.</li><li><strong>Rust</strong> uses <code>match</code> on <code>BatchDecision</code>, then <code>if</code> on status.</li></ul>
+<p>The V3 audit:</p>
+<blockquote><p>uploaded transaction IDs are suppressed when the batch is fatal, even if one row decision looks accepted. The report projects from the final batch decision, not from raw rows.</p></blockquote>
+<p>All four hold that line. No engine duplicated decision logic at the report.</p>
+<h2 id="the-big-comparison">The big comparison</h2>
+<p>Pulling the four boundary cells together against the four engines:</p>
+<div class="table-wrap"><table><thead><tr><th>Concern</th><th>C#</th><th>F#</th><th>Haskell</th><th>Rust</th></tr></thead><tbody><tr><td><strong>CSV import</strong></td><td>typed errors, repeated parsing branches</td><td>typed errors, monadic accumulation</td><td>regular <code>Either</code>-do, <code>Double</code>-then-<code>Rational</code> leak</td><td><code>TryFrom</code> typed errors, <code>f64</code> money leak</td></tr><tr><td><strong>Repository ports</strong></td><td>clean ports, string-detour rehydration</td><td>direct typed mapping</td><td>pure facade, academic</td><td>clean traits, string-detour rehydration</td></tr><tr><td><strong>Audit projection</strong></td><td>clean, requires <code>_ =&gt; throw</code> default</td><td>clean, compiler-enforced exhaustive</td><td>tightest, <code>NonEmpty</code>-enforced</td><td>clean, debug-format DTOs</td></tr><tr><td><strong>Operational report</strong></td><td>derived, <code>if</code>-based fatal check</td><td>derived, exhaustive inner match</td><td>derived, one-<code>case</code> status+fatal</td><td>derived, exhaustive variants</td></tr></tbody></table></div>
+<p>Read down each engine column:</p>
+<ul><li><strong>C#</strong> is the most practical and the most familiar, with two real gaps: string detour at the repository edge, and runtime exhaustiveness closed by tests rather than the compiler.</li><li><strong>F#</strong> is the cleanest <em>practical</em> shape: typed at every edge, no string detour, compiler-enforced exhaustive matches. The weakest part is the interop module is large and mixes adapter concerns.</li><li><strong>Haskell</strong> is the cleanest <em>type</em> shape and the least production-shaped boundary. Pure functions everywhere, but the repository port is a function-as-record without any IO story, and the import code parses money through <code>Double</code>.</li><li><strong>Rust</strong> is disciplined and well-tooled, with the same string-detour shortcut as C# and an <code>f64</code> numeric leak.</li></ul>
+<h2 id="the-honest-verdict">The honest verdict</h2>
+<p>The V3 results document scored the four engines at 91, 90, 89, 88 — within four points of each other. The ranking is real, but it is narrow, and the reason it changed from V2 is the boundary.</p>
+<p>From the V3 results:</p>
+<blockquote><p>F# kept the cleanest practical boundary. Haskell&#x27;s pure domain stayed cleanest in isolation, but F# handled repository, import, audit, and report pressure while staying realistic for .NET.</p></blockquote>
+<blockquote><p>[C#&#x27;s] application services, DTOs, repositories, and xUnit tests match the expected shop shape.</p></blockquote>
+<blockquote><p>V2 favored Haskell as the best reference and C# as the practical app choice. V3 makes F# the strongest core-plus-boundary compromise because integration pressure rewards typed domain modeling and .NET proximity at the same time.</p></blockquote>
+<p>That last sentence is the headline. The V2 winner (Haskell) is not the V3 winner. The V3 winner (F#) was second in V2. The reason for the reorder is exactly the boundary pressure this chapter walked through.</p>
+<p>The narrative payoff:</p>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart LR
+    V2Winner[V2: Haskell wins on domain purity] -.boundary added.-&gt; V3Winner[V3: F# wins on core+boundary]
+    V2Winner -.boundary added.-&gt; V3Reality[Haskell drops to reference-only]
+    V3Winner --&gt; V3Practical[F# is the .NET practical pick]
+    V3Practical --&gt; V3Cshop[C# stays the production-default]</code></pre></figure>
+<p>If you can put an F# project inside your .NET solution, that is the strongest combined shape this experiment found. If you cannot — and in most .NET shops you cannot — then idiomatic C# (the V2 second-place chapter, <a href="../part1/04-idiomatic-csharp.html">Idiomatic C#</a>) is the default that does not throw away most of the V2 gains.</p>
+<p>Haskell is the reference. Rust is the parallel option if you are already building a service in it. Neither is the .NET production recommendation.</p>
+<p><a href="13-final-takeaway.html">Chapter 13</a> is the closer: what to actually recommend a Fieldale junior do, given everything the two halves of this book have shown.</p>
+    </article>
+    <footer class="pager">
+      <a class="pager-prev" href="11-boundary-returns.html">Previous: The boundary returns</a>
+      <a class="pager-next" href="13-final-takeaway.html">Next: The final takeaway</a>
+    </footer>
+  </main>
+</body>
+</html>

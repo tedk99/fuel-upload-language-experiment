@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A Haskell primer for C# developers - Blub &amp; Fuel</title>
+  <link rel="stylesheet" href="../book.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="book-title" href="../index.html">Blub &amp; Fuel</a>
+    <nav><ol><li><a href="../index.html">Blub &amp; Fuel</a></li><li><a href="../setup.html">Setup</a></li><li><a href="01-blub-paradox.html">The Blub Paradox</a></li><li><a href="02-normal-csharp-tour.html">Tour: the normal C# fuel engine</a></li><li><a href="03-seven-footguns.html">Seven footguns</a></li><li><a href="04-idiomatic-csharp.html">Idiomatic C#: same language, modern features on</a></li><li><a href="05-fsharp-native.html">F#: leaving C# behind</a></li><li><a href="06-fsharp-interop.html">F# interop: where the domain meets C#</a></li><li><a href="07-haskell-primer.html" aria-current="page" class="active">A Haskell primer for C# developers</a></li><li><a href="08-haskell-safety.html">Haskell: making the bug unrepresentable</a></li><li><a href="09-rust-lands.html">Rust: a different goal, the same place</a></li><li><a href="10-the-punch.html">The punch: what each rung made impossible</a></li><li><a href="../part1b/11-boundary-returns.html">The boundary returns</a></li><li><a href="../part1b/12-boundary-side-by-side.html">Four engines at the boundary</a></li><li><a href="../part1b/13-final-takeaway.html">The final takeaway</a></li><li><a href="../part2/r1-decision.html">Modelling the row decision</a></li><li><a href="../part2/r2-validation.html">Validation and warnings</a></li><li><a href="../part2/r3-recovery.html">Duplicate / recovery policy</a></li><li><a href="../part2/r4-boundary.html">The boundary</a></li><li><a href="../part2/r5-exhaustiveness.html">Exhaustiveness</a></li><li><a href="../part2/r6-mutability.html">Mutability and identity</a></li><li><a href="../part2/r7-null.html">Null and absence</a></li><li><a href="../references.html">references</a></li></ol></nav>
+  </aside>
+  <main>
+    <header class="page-header">
+      <p class="kicker">Static reader</p>
+      <h1>A Haskell primer for C# developers</h1>
+      <p class="source-link">Generated from <a href="../../../book/part1/07-haskell-primer.qmd">part1/07-haskell-primer.qmd</a>.</p>
+    </header>
+    <article>
+      <h2 id="up-the-cliff-face">Up the cliff face</h2>
+<p>The previous rung (F#) was familiar enough. Same runtime as C#, same NuGet, same <code>dotnet test</code>. Discriminated unions instead of class hierarchies, but you could squint and see how the C# code maps over.</p>
+<p>Haskell is the cliff face above that. Different runtime, different build tool, no <code>null</code>, no <code>class</code>, no <code>void</code>. The thing that&#x27;s worth the climb: <strong>Haskell is the language where the type system was the design goal</strong>, not a feature bolted onto something else. Pure functions are the default, immutability is the default, side effects are tracked in the function&#x27;s <em>signature</em> — so the compiler knows which functions can do I/O and which can&#x27;t.</p>
+<p>Our fuel engine maps almost 1:1 onto Haskell&#x27;s natural shape. A row decision is one of six things — that&#x27;s a sum type. A non-empty list of warnings is a <code>NonEmpty</code>. A classifier that does no I/O is a function whose signature simply has no <code>IO</code> in it. The work isn&#x27;t translating the design into the language; the work is reading the language at all.</p>
+<p>So this chapter is the syntax tour. Just enough to make the next chapter — where we look at what Haskell makes <strong>unrepresentable</strong> — legible.</p>
+<h2 id="the-five-minute-syntax-tour">The five-minute syntax tour</h2>
+<h3 id="data-sum-types-as-a-first-class-declaration"><code>data</code> — sum types as a first-class declaration</h3>
+<p>A C# enum has names but no payload. A C# sealed-record hierarchy has payload but takes 50 lines. Haskell&#x27;s <code>data</code> does both, on one declaration:</p>
+<pre><code class="language-haskell">data RowDecision
+  = Accepted FuelTransaction
+  | AcceptedWithWarnings FuelTransaction (NonEmpty ValidationWarning)
+  | Quarantined FuelTransaction (NonEmpty QuarantineReason)
+  | SkippedDuplicate SkippedDuplicate
+  | Rejected RejectedRow
+  | Fatal FatalError
+  deriving stock (Eq, Show)</code></pre>
+<p>Read it like English: &quot;a <code>RowDecision</code> <em>is</em> one of: an <code>Accepted</code> carrying a <code>FuelTransaction</code>, <strong>or</strong> an <code>AcceptedWithWarnings</code> carrying a transaction plus a non-empty list of warnings, <strong>or</strong> …&quot; The <code>|</code> is &quot;or.&quot; Each branch is called a <strong>constructor</strong>.</p>
+<p>F# (chapter 5) is nine lines for the same thing. Haskell is eight. Idiomatic C# (chapter 4) is roughly fifty, because each case needs its own nested <code>sealed record</code> and the no-empty-list invariant becomes a runtime check in a constructor. The line count is a proxy for <strong>what the language has built in vs. what you have to assemble</strong>. Haskell has sum types built in.</p>
+<h3 id="deriving-stock-eq-show-equality-and-printing-for-free"><code>deriving stock (Eq, Show)</code> — equality and printing for free</h3>
+<p>C# <code>record</code> gives you structural equality and a <code>ToString()</code> for free. Haskell did it first, more generally. <code>deriving stock (Eq, Show)</code> says &quot;compiler, please write the obvious structural-equality and print-to-string implementations for me.&quot; The <code>stock</code> keyword (enabled by the <code>DerivingStrategies</code> extension this project uses) is hygiene — explicit about <em>which</em> derivation strategy to apply.</p>
+<p>You&#x27;ll see this on every type in the codebase. It&#x27;s not noise; it&#x27;s the deal you signed up for.</p>
+<h3 id="type-signatures-and-arrows">Type signatures — <code>::</code> and arrows</h3>
+<p>C# writes <code>Foo MethodName(A a, B b, C c)</code>. Haskell writes the type on its own line, with arrows:</p>
+<pre><code class="language-haskell">classifyRow :: ValidationConfig -&gt; UploadMode -&gt; RowContext -&gt; RowDecision
+classifyRow config mode context =
+  case (...) of
+    ...</code></pre>
+<p>Read the <code>::</code> as &quot;has type&quot; and the <code>-&gt;</code> as &quot;function returning&quot;:</p>
+<blockquote><p><code>classifyRow</code> has type — given a <code>ValidationConfig</code>, then an <code>UploadMode</code>, then a <code>RowContext</code>, produces a <code>RowDecision</code>.</p></blockquote>
+<p>The type signature is on the line above; the function body is below. The reason the arrows chain the way they do (rather than using commas) is <strong>currying</strong> — every multi-argument Haskell function is, under the hood, a function that takes the first argument and returns a function of the rest. That&#x27;s why you can write <code>fmap (classifyRow config mode) contexts</code> later in <code>DecisionEngine.hs</code> — <code>classifyRow config mode</code> is itself a valid value, a function of type <code>RowContext -&gt; RowDecision</code>, ready to be mapped over a list. C# can do the same with explicit lambdas; Haskell makes it the default shape.</p>
+<h3 id="pattern-matching-with-case-of">Pattern matching with <code>case ... of</code></h3>
+<p>C# 9 gave you <code>switch</code> expressions. Haskell has had this since 1990. The classifier opens like this:</p>
+<pre><code class="language-haskell">classifyRow config mode context =
+  case (contextVehicleLookup context, contextDuplicateCheck context) of
+    (VehicleLookupFatal fatalError, _) -&gt;
+      Fatal fatalError
+    (_, DuplicateCheckFatal fatalError) -&gt;
+      Fatal fatalError
+    _ -&gt;
+      classifyValidated</code></pre>
+<p>Three things to notice:</p>
+<ol><li><strong>It&#x27;s an expression.</strong> The whole <code>case … of …</code> block <em>is</em> a value. You can return it, assign it, pass it to another function.</li><li><strong>Wildcards.</strong> <code>_</code> matches anything without binding.</li><li><strong>Tuples.</strong> <code>(a, b)</code> builds a pair; <code>(a, b) -&gt;</code> destructures one.</li></ol>
+<p>The compiler refuses to ship if you&#x27;ve left a constructor unmatched — provided the project has <code>-Wincomplete-uni-patterns</code> on, which this one does. Footgun 7 (the <code>switch</code> statement with no default) cannot exist in Haskell.</p>
+<h3 id="maybe-a-explicit-optionality"><code>Maybe a</code> — explicit optionality</h3>
+<p>Haskell has no <code>null</code>. There is no value of type <code>Vehicle</code> that represents &quot;no vehicle.&quot; If you want optionality, you ask for it in the type:</p>
+<pre><code class="language-haskell">data Maybe a = Nothing | Just a</code></pre>
+<p><code>Maybe Vehicle</code> is a sum type with two constructors: <code>Nothing</code> (it&#x27;s absent) or <code>Just vehicle</code> (it&#x27;s present, here it is). You can&#x27;t call a <code>Vehicle</code> method on a <code>Maybe Vehicle</code> — the compiler refuses. You have to pattern-match it open first:</p>
+<pre><code class="language-haskell">case maybeVehicle of
+  Nothing -&gt; ...
+  Just vehicle -&gt; ... -- now we have the vehicle</code></pre>
+<p>This is the same idea as F#&#x27;s <code>Option&lt;&#x27;T&gt;</code> from chapter 5, except <strong>there is no opt-out</strong>. C# 8 nullable reference types are opt-in and the compiler treats violations as warnings. Haskell&#x27;s <code>Maybe</code> is the only way to express &quot;might not be there,&quot; and the compiler treats violations as type errors.</p>
+<h3 id="either-e-a-typed-errors-instead-of-exceptions"><code>Either e a</code> — typed errors instead of exceptions</h3>
+<p>The other workhorse. <code>Either e a</code> is either a <code>Left e</code> (failure) or a <code>Right a</code> (success). The boundary parser uses it everywhere. C# would throw a <code>FormatException</code>. F# would return <code>Result&lt;UploadMode, ParseError&gt;</code>. Haskell returns <code>Either [FuelUploadMappingError] UploadMode</code>. The &quot;error path&quot; is a value, not an exception, and the type system forces every caller to consider it.</p>
+<h3 id="nonempty-a-a-list-with-at-least-one-element-at-the-type-level"><code>NonEmpty a</code> — a list with at least one element, at the type level</h3>
+<p>The single most useful generic type in this codebase. Defined in the standard library as:</p>
+<pre><code class="language-haskell">data NonEmpty a = a :| [a]</code></pre>
+<p>A non-empty list of <code>a</code> is one <code>a</code> followed by a (possibly empty) regular list of <code>a</code>. The <code>:|</code> is the constructor. There is <strong>no value of type <code>NonEmpty a</code> that is empty</strong>. The compiler will not let you build one.</p>
+<p>That&#x27;s why <code>RowDecision</code> can say:</p>
+<pre><code class="language-haskell">| Quarantined FuelTransaction (NonEmpty QuarantineReason)</code></pre>
+<p>and the empty-quarantine-reasons case literally cannot exist. In C# we had to write a constructor that throws <code>ArgumentException</code> when the list is empty — a runtime guard. In Haskell the type itself is the guard. Chapter 8 returns to this.</p>
+<h3 id="io-side-effects-in-the-signature"><code>IO ()</code> — side effects in the signature</h3>
+<p>Pure functions in Haskell have signatures like <code>A -&gt; B</code>. Functions that do I/O — read a file, log to console, hit the network — have signatures with <code>IO</code> in them:</p>
+<pre><code class="language-haskell">main :: IO ()
+putStrLn :: String -&gt; IO ()
+readFile :: FilePath -&gt; IO String</code></pre>
+<p><code>IO String</code> means &quot;an action that, when run, produces a <code>String</code>.&quot; The crucial property: <strong><code>IO</code> is contagious</strong>. If you call an <code>IO</code> function, your function is <code>IO</code> too. There is no way to call <code>putStrLn</code> from inside a function declared <code>:: A -&gt; B</code> without changing the signature to <code>:: A -&gt; IO B</code>.</p>
+<p>Our entire decision engine is pure:</p>
+<pre><code class="language-haskell">classifyRow :: ValidationConfig -&gt; UploadMode -&gt; RowContext -&gt; RowDecision</code></pre>
+<p>No <code>IO</code> anywhere. The compiler guarantees no row classifier in this codebase can ever log, mutate, or call a database. Footgun 1 (the rogue logger touching a null <code>Vehicle</code>) is structurally impossible because <em>there is no way for a logger to live inside <code>classifyRow</code></em>.</p>
+<h3 id="record-syntax-and-field-accessors-as-functions">Record syntax and field-accessors-as-functions</h3>
+<pre><code class="language-haskell">data PreviousAttempt = PreviousAttempt
+  { previousTransactionId :: TransactionId
+  , previousCanonicalizationState :: CanonicalizationState
+  , previousFinalizationState :: FinalizationState
+  }
+  deriving stock (Eq, Show)</code></pre>
+<p>Familiar shape — three fields with types. The Haskell-specific part: <strong>every field name is automatically a top-level function</strong>. The declaration above generates:</p>
+<pre><code class="language-haskell">previousFinalizationState :: PreviousAttempt -&gt; FinalizationState</code></pre>
+<p>So instead of writing <code>previousAttempt.PreviousFinalizationState</code>, you write <code>previousFinalizationState previousAttempt</code> — the field <em>is</em> the accessor function. You&#x27;ll see this all over <code>DuplicatePolicy.hs</code>:</p>
+<pre><code class="language-haskell">| previousFinalizationState previousAttempt == FailedRetryable =
+    UploadDuplicate</code></pre>
+<p>Read: &quot;if the result of calling <code>previousFinalizationState</code> on <code>previousAttempt</code> equals <code>FailedRetryable</code>, then <code>UploadDuplicate</code>.&quot;</p>
+<p>The catch: field names are global within their module, so this codebase prefixes everything (<code>previousTransactionId</code>, <code>parsedRowNumber</code>, <code>transactionAmount</code>). That prefix is the workaround for the global-name rule.</p>
+<h3 id="newtype-zero-cost-wrappers-for-primitives"><code>newtype</code> — zero-cost wrappers for primitives</h3>
+<pre><code class="language-haskell">newtype RowNumber = RowNumber Int
+  deriving stock (Eq, Ord, Show)</code></pre>
+<p>A <code>newtype</code> is like <code>data</code> restricted to exactly one constructor with exactly one field. The compiler erases the wrapper at runtime — a <code>RowNumber</code> is just an <code>Int</code> in memory — but to the type system, <code>RowNumber</code> and <code>Int</code> are incompatible. Zero overhead, full safety. Same trick as the idiomatic C# <code>record struct RowNumber(int Value)</code>, shorter syntax and free <code>Eq</code>/<code>Ord</code>/<code>Show</code>.</p>
+<h2 id="the-module-layout">The module layout</h2>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart TB
+  subgraph Boundary[&quot;FuelUpload.Api — DTO &amp;lt;-&amp;gt; domain&quot;]
+    Api[Api.hs]
+  end
+  subgraph Engine[&quot;Engine (pure)&quot;]
+    DE[DecisionEngine.hs]
+    DP[DuplicatePolicy.hs]
+    VAL[Validation.hs]
+    SUM[Summary.hs]
+  end
+  subgraph Domain[&quot;Domain (pure types)&quot;]
+    DEC[Domain.Decision]
+    DUP[Domain.Duplicate]
+    ROW[Domain.Row]
+    VEH[Domain.Vehicle]
+    PRIM[Domain.Primitive]
+  end
+  subgraph Reports[&quot;Projections (V3)&quot;]
+    AUD[Audit.hs]
+    REP[Report.hs]
+  end
+
+  Api --&gt; DE
+  Api --&gt; DEC
+  DE --&gt; DP
+  DE --&gt; VAL
+  DE --&gt; SUM
+  DE --&gt; DEC
+  DP --&gt; DEC
+  VAL --&gt; DEC
+  SUM --&gt; DEC
+  AUD --&gt; DEC
+  REP --&gt; DEC
+  DEC --&gt; DUP
+  DEC --&gt; ROW
+  DEC --&gt; VEH
+  DEC --&gt; PRIM
+  DUP --&gt; PRIM
+  ROW --&gt; PRIM
+  VEH --&gt; PRIM</code></pre></figure>
+<p>Two observations worth filing away:</p>
+<ol><li><strong><code>Domain.Primitive</code> is the leaf.</strong> The newtypes (<code>RowNumber</code>, <code>TransactionId</code>, <code>MoneyAmount</code>) and closed enums (<code>UploadMode</code>, <code>FatalError</code>) sit at the bottom. Everything depends on them. Change one, the whole library rebuilds — which is exactly what you want, because they&#x27;re foundational.</li></ol>
+<ol><li><strong><code>Api</code> is the only module that touches strings or the outside world.</strong> Everything else trades in fully-typed values. If you ever found <code>import Data.Char</code> in a <code>Domain.*</code> file, something would be wrong. The module structure is the boundary.</li></ol>
+<p>The file paths match the module names <em>exactly</em> — <code>FuelUpload.Domain.Decision</code> lives at <code>src/FuelUpload/Domain/Decision.hs</code>. The compiler enforces it. There&#x27;s no &quot;search by namespace&quot; indirection; the module name <em>is</em> the path.</p>
+<h2 id="reading-domain-decision-hs">Reading <code>Domain/Decision.hs</code></h2>
+<p>The whole file is about 115 lines. The module header lists the exports — <code>RowDecision (..)</code> means &quot;the type <em>and</em> its constructors&quot;; omit the dots and constructors stay private. Then five <code>data</code> declarations for the supporting types (<code>FuelTransaction</code>, <code>ValidationError</code>, <code>ValidationWarning</code>, <code>QuarantineReason</code>, <code>RejectionReason</code>), each carrying the specific data its case needs. <code>QuantityExceedsMaximum quantity limit</code> records both the offending quantity <em>and</em> the configured limit — so the rejection downstream can quote both without parsing them out of a message string.</p>
+<p>The centerpiece:</p>
+<pre><code class="language-haskell">data RowDecision
+  = Accepted FuelTransaction
+  | AcceptedWithWarnings FuelTransaction (NonEmpty ValidationWarning)
+  | Quarantined FuelTransaction (NonEmpty QuarantineReason)
+  | SkippedDuplicate SkippedDuplicate
+  | Rejected RejectedRow
+  | Fatal FatalError
+  deriving stock (Eq, Show)</code></pre>
+<p>Six constructors, each carrying exactly what its case needs and no more:</p>
+<ul><li><code>Accepted</code> carries the finished transaction. No warnings, no errors.</li><li><code>AcceptedWithWarnings</code> carries a transaction <em>and</em> a <code>NonEmpty ValidationWarning</code> — the compiler refuses to build it with an empty warning list.</li><li><code>Quarantined</code> is the same shape with <code>NonEmpty QuarantineReason</code>. A zero-reason row literally cannot be <code>Quarantined</code>.</li><li><code>SkippedDuplicate</code>, <code>Rejected</code>, and <code>Fatal</code> each carry their typed payload.</li></ul>
+<p>There is no &quot;status string&quot; anywhere — the constructor name <em>is</em> the status. There are no nullable accessors. There are no empty-list &quot;optional&quot; warnings.</p>
+<p>Compare to the normal-C# version from chapter 2:</p>
+<pre><code class="language-csharp">public class RowDecision
+{
+    public int RowNumber;
+    public string Status;
+    public FuelTransaction Transaction;       // null when Status is Rejected / Fatal / Skipped
+    public Vehicle Vehicle;                   // null when vehicle lookup failed
+    public List&lt;string&gt; Errors = new List&lt;string&gt;();
+    public List&lt;string&gt; Warnings = new List&lt;string&gt;();
+    public List&lt;string&gt; QuarantineReasons = new List&lt;string&gt;();
+    public string SkipReason;
+    public string FatalMessage;
+}</code></pre>
+<p>Nine fields, four of which are nullable, three of which are mutable lists. The shape itself doesn&#x27;t tell you which combinations are valid. The Haskell version doesn&#x27;t have invalid combinations.</p>
+<h2 id="reading-a-slice-of-decisionengine-hs">Reading a slice of <code>DecisionEngine.hs</code></h2>
+<p>Now the function that produces a <code>RowDecision</code>. Two key passages. First, the top-level signature and the fatal-error gate:</p>
+<pre><code class="language-haskell">classifyRow :: ValidationConfig -&gt; UploadMode -&gt; RowContext -&gt; RowDecision
+classifyRow config mode context =
+  case (contextVehicleLookup context, contextDuplicateCheck context) of
+    (VehicleLookupFatal fatalError, _) -&gt;
+      Fatal fatalError
+    (_, DuplicateCheckFatal fatalError) -&gt;
+      Fatal fatalError
+    _ -&gt;
+      classifyValidated</code></pre>
+<p>A 2-tuple pattern match handles the fatal cases first. If either the vehicle lookup or the duplicate check came back fatal, the row is <code>Fatal</code>. Otherwise — the wildcard branch — we drop into the local <code>classifyValidated</code> helper.</p>
+<p>The recovery matrix lives in <code>DuplicatePolicy.hs</code> as one function defined by multiple equations, with <strong>guards</strong> (<code>|</code>) refining each one. A guard is a boolean condition; the first <code>True</code> one wins, and <code>otherwise</code> is a conventional name for <code>True</code>. Here are the <code>Retry</code> and <code>AggressiveRecovery</code> equations:</p>
+<pre><code class="language-haskell">duplicateDecision Retry (DuplicateOf previousAttempt)
+  | previousFinalizationState previousAttempt == FailedRetryable =
+      UploadDuplicate
+  | otherwise =
+      SkipDuplicate (skipReasonForPreviousAttempt previousAttempt)
+duplicateDecision AggressiveRecovery (DuplicateOf previousAttempt)
+  | previousCanonicalizationState previousAttempt == FailedBeforeCanonicalization =
+      UploadDuplicate
+  | previousCanonicalizationState previousAttempt == CanonicalizedWithoutTransactionKey
+      &amp;&amp; previousFinalizationState previousAttempt /= Finalized =
+      UploadDuplicate
+  | otherwise =
+      SkipDuplicate (skipReasonForPreviousAttempt previousAttempt)</code></pre>
+<p>Same matrix as the normal-C# <code>ShouldAcceptDuplicate</code> from chapter 2 (out-bool, string compares, nine branches over a flat surface). Same logic. The Haskell version <em>is</em> the matrix, written as patterns over the algebraic types. Add <code>ManualOverride</code> to <code>UploadMode</code> and the compiler tells you exactly where the new equation has to go — that&#x27;s chapter 8&#x27;s territory.</p>
+<p>Finally, the warning/quarantine post-step, with the <code>NonEmpty</code> construction inline:</p>
+<pre><code class="language-haskell">acceptedOrQuarantined vehicle =
+  let transaction = toTransaction row vehicle
+   in case quarantineReasons config row of
+        firstReason : remainingReasons -&gt;
+          Quarantined transaction (firstReason :| remainingReasons)
+        [] -&gt;
+          case validationWarnings config row of
+            firstWarning : remainingWarnings -&gt;
+              AcceptedWithWarnings transaction (firstWarning :| remainingWarnings)
+            [] -&gt;
+              Accepted transaction</code></pre>
+<p><code>firstReason : remainingReasons</code> is <strong>list pattern syntax</strong> — the <code>:</code> operator (read &quot;cons&quot;) destructures a list into its head and tail. Matching the regular list <code>[QuarantineReason]</code> as <code>firstReason : remainingReasons</code> proves to the compiler that at least one element exists, and we use <code>:|</code> (the <code>NonEmpty</code> constructor) to repackage that proof. If we tried to write <code>Quarantined transaction (someEmptyList)</code>, the program would not compile.</p>
+<p>That&#x27;s the whole trick. The empty-list case is a structurally separate branch that produces a different <code>RowDecision</code> constructor (<code>Accepted</code> or <code>AcceptedWithWarnings</code>). You <strong>cannot</strong> end up at the <code>Quarantined</code> branch holding an empty list. The types don&#x27;t allow it.</p>
+<h2 id="what-s-next">What&#x27;s next</h2>
+<p>You can now read most of the Haskell files in this repo. The exceptions are the applicative-style combinators (<code>&lt;$&gt;</code>, <code>&lt;*&gt;</code>) in <code>Api.hs</code>, which we&#x27;ll skim past, and the QuickCheck generators in <code>Properties.hs</code>, which we&#x27;ll meet next chapter.</p>
+<p>Chapter 8 is the one this primer was setting up. Now we walk the seven-footgun catalogue across Haskell&#x27;s type system and ask the question that&#x27;s only askable up on the cliff face: <strong>is there a value of any type in the program that could even represent the bug?</strong></p>
+<p><a href="08-haskell-safety.html">next →</a></p>
+    </article>
+    <footer class="pager">
+      <a class="pager-prev" href="06-fsharp-interop.html">Previous: F# interop: where the domain meets C#</a>
+      <a class="pager-next" href="08-haskell-safety.html">Next: Haskell: making the bug unrepresentable</a>
+    </footer>
+  </main>
+</body>
+</html>

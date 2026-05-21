@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Null and absence - Blub &amp; Fuel</title>
+  <link rel="stylesheet" href="../book.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="book-title" href="../index.html">Blub &amp; Fuel</a>
+    <nav><ol><li><a href="../index.html">Blub &amp; Fuel</a></li><li><a href="../setup.html">Setup</a></li><li><a href="../part1/01-blub-paradox.html">The Blub Paradox</a></li><li><a href="../part1/02-normal-csharp-tour.html">Tour: the normal C# fuel engine</a></li><li><a href="../part1/03-seven-footguns.html">Seven footguns</a></li><li><a href="../part1/04-idiomatic-csharp.html">Idiomatic C#: same language, modern features on</a></li><li><a href="../part1/05-fsharp-native.html">F#: leaving C# behind</a></li><li><a href="../part1/06-fsharp-interop.html">F# interop: where the domain meets C#</a></li><li><a href="../part1/07-haskell-primer.html">A Haskell primer for C# developers</a></li><li><a href="../part1/08-haskell-safety.html">Haskell: making the bug unrepresentable</a></li><li><a href="../part1/09-rust-lands.html">Rust: a different goal, the same place</a></li><li><a href="../part1/10-the-punch.html">The punch: what each rung made impossible</a></li><li><a href="../part1b/11-boundary-returns.html">The boundary returns</a></li><li><a href="../part1b/12-boundary-side-by-side.html">Four engines at the boundary</a></li><li><a href="../part1b/13-final-takeaway.html">The final takeaway</a></li><li><a href="r1-decision.html">Modelling the row decision</a></li><li><a href="r2-validation.html">Validation and warnings</a></li><li><a href="r3-recovery.html">Duplicate / recovery policy</a></li><li><a href="r4-boundary.html">The boundary</a></li><li><a href="r5-exhaustiveness.html">Exhaustiveness</a></li><li><a href="r6-mutability.html">Mutability and identity</a></li><li><a href="r7-null.html" aria-current="page" class="active">Null and absence</a></li><li><a href="../references.html">references</a></li></ol></nav>
+  </aside>
+  <main>
+    <header class="page-header">
+      <p class="kicker">Static reader</p>
+      <h1>Null and absence</h1>
+      <p class="source-link">Generated from <a href="../../../book/part2/r7-null.qmd">part2/r7-null.qmd</a>.</p>
+    </header>
+    <article>
+      <h2 id="no-value-needs-a-type">&quot;No value&quot; needs a type</h2>
+<p>A lot of the work in a decision engine is about absence. The vehicle lookup returned nothing. The previous attempt has no transaction key. The merchant name is missing. Each of these is a legitimate domain state — not a programming error — and the type system either lets you name it or it doesn&#x27;t.</p>
+<p>When the type system <em>doesn&#x27;t</em>, you get <code>null</code>. And <code>null</code> is the problem.</p>
+<p>The concrete example we use throughout: <strong>&quot;vehicle not found.&quot;</strong> It&#x27;s not an exception, it&#x27;s not a bug, it&#x27;s not a corrupt row. It&#x27;s an ordinary outcome of an ordinary classification. Five engines model it five different ways.</p>
+<h2 id="normal-c-null-everywhere-nrt-off">Normal C# — <code>null</code> everywhere, NRT off</h2>
+<pre><code class="language-csharp">// normalcsharp-fuel-engine/src/FuelUploadEngine/Models/RowDecision.cs
+public string Status;
+public FuelTransaction Transaction;       // null when Status is Rejected / Fatal / Skipped
+public Vehicle Vehicle;                   // null when vehicle lookup failed
+public string SkipReason;
+public string FatalMessage;</code></pre>
+<p>NRT is off in the <code>.csproj</code>. Every reference type is implicitly nullable. &quot;Vehicle not found&quot; is signalled by:</p>
+<ol><li><code>VehicleLookupStatus</code> string set to <code>&quot;NotFound&quot;</code>.</li><li><code>Vehicle</code> property left <code>null</code>.</li><li><code>Status</code> set to <code>&quot;Rejected&quot;</code>.</li><li>An error string <code>&quot;VehicleNotFound:...&quot;</code> pushed onto <code>Errors</code>.</li></ol>
+<p>Four implicit invariants encoded across four separately-typed fields. The compiler enforces none of them. A debug <code>Console.WriteLine</code> in the service reads <code>d.Vehicle.LicensePlate</code> unconditionally — for a <code>Rejected</code> row that&#x27;s <code>null.LicensePlate</code>, and the whole batch dies with NullReferenceException. (See footgun #1 in <a href="../part1/03-seven-footguns.html">chapter 03</a>.)</p>
+<p><code>null</code> is the universal absence story. It also stands in for &quot;I forgot to populate this&quot;, &quot;the deserialiser left it default&quot;, and &quot;this row failed before we got to that field.&quot; The same value, three meanings.</p>
+<h2 id="idiomatic-c-nrt-on-typed-absence-via-dus">Idiomatic C# — NRT on, typed absence via DUs</h2>
+<pre><code class="language-csharp">// csharp-fuel-engine/src/FuelUploadEngine/Domain/VehicleLookupResult.cs
+public abstract record VehicleLookupResult
+{
+    private VehicleLookupResult() { }
+
+    public sealed record Found(Vehicle Vehicle) : VehicleLookupResult;
+    public sealed record NotFound(VehicleIdentifier Identifier) : VehicleLookupResult;
+    public sealed record Ambiguous(VehicleIdentifier Identifier, IReadOnlyList&lt;Vehicle&gt; Candidates) : VehicleLookupResult;
+    public sealed record Unavailable(FatalError Error) : VehicleLookupResult;
+}</code></pre>
+<p><code>&lt;Nullable&gt;enable&lt;/Nullable&gt;</code> is set in the <code>.csproj</code>. Every domain property is non-nullable; the compiler enforces that you never assign <code>null</code> to one without an explicit <code>?</code>. &quot;Vehicle not found&quot; is a <strong>named sum-type case</strong> — <code>VehicleLookupResult.NotFound</code> carrying the requested identifier so the caller knows <em>which</em> vehicle wasn&#x27;t found. It is not the absence of a <code>Vehicle</code> value; it&#x27;s the <strong>presence</strong> of a typed &quot;no-vehicle&quot; value.</p>
+<p>Compare:</p>
+<pre><code class="language-csharp">// in the classifier:
+return lookup switch
+{
+    VehicleLookupResult.Found f      =&gt; /* use f.Vehicle */,
+    VehicleLookupResult.NotFound nf  =&gt; Reject(nf.Identifier),
+    VehicleLookupResult.Ambiguous a  =&gt; Reject(a.Identifier, a.Candidates),
+    VehicleLookupResult.Unavailable u =&gt; Fatal(u.Error),
+    _ =&gt; throw new InvalidOperationException()
+};</code></pre>
+<p>No null checks. The compiler tracks which arm gives access to which fields. The only remaining null story is <strong>at the boundary</strong>, where DTO records have nullable string fields because JSON might omit them (<code>string? VehicleId</code>, <code>string? UploadMode</code>). The mapper&#x27;s job is to collapse those nulls into typed parse errors before the domain ever sees them.</p>
+<h2 id="f-no-null-in-f-types-option-t-for-absence">F# — no null in F# types, <code>Option&lt;&#x27;T&gt;</code> for absence</h2>
+<pre><code class="language-fsharp">[&lt;RequireQualifiedAccess&gt;]
+type VehicleLookupResult =
+    | Matched of Vehicle
+    | NotFound
+    | Ambiguous of Vehicle list
+    | Fatal of FatalProcessingError</code></pre>
+<p>F# records, unions, and tuples <strong>cannot be null</strong> as far as F# is concerned — assigning <code>null</code> to a value of an F# type is a compile error. Absence has a dedicated type: <code>Option&lt;&#x27;T&gt; = Some of &#x27;T | None</code>. The classifier never sees <code>null</code>; it pattern-matches on a union or unwraps an <code>Option</code>.</p>
+<p>The exception, as ever, is <code>[&lt;CLIMutable&gt;]</code>:</p>
+<pre><code class="language-fsharp">[&lt;CLIMutable&gt;]
+type FuelUploadRowDto =
+    { VehicleKey: string
+      MerchantName: string
+      /* ... */ }</code></pre>
+<p>The CLR sees a parameterless constructor and writable string properties. A JSON deserialiser can produce a <code>FuelUploadRowDto</code> where <code>VehicleKey = null</code>. F#&#x27;s mapper has to <em>defend</em> the boundary with <code>String.IsNullOrWhiteSpace</code> checks — the only null-handling code in the engine. Once past <code>Interop.fs</code>, no F# value can be <code>null</code> again.</p>
+<p>This is also why <code>Option</code> is more visible at the boundary than inside the domain — the inside is null-free <em>by language</em>, but the boundary has to bridge between &quot;the wire might be null&quot; and &quot;the domain is total.&quot;</p>
+<h2 id="haskell-no-null-maybe-a-and-either-e-a">Haskell — no null, <code>Maybe a</code> and <code>Either e a</code></h2>
+<pre><code class="language-haskell">-- haskell-fuel-engine/src/FuelUpload/Domain/Vehicle.hs
+data VehicleLookupResult
+  = VehicleFound Vehicle
+  | VehicleMissing Registration
+  | VehicleLookupFatal FatalError
+  deriving stock (Eq, Show)</code></pre>
+<p>Haskell has no <code>null</code>. The closest concept is <code>Maybe a = Nothing | Just a</code>, which is just an ADT like any other. There is no <code>[&lt;CLIMutable&gt;]</code> equivalent because there is no CLR to interop with; the boundary uses JSON libraries that parse straight into ADTs, producing <code>Maybe String</code> for optional fields rather than nullable strings.</p>
+<p>For lookups, &quot;not found&quot; is <code>VehicleMissing Registration</code> — a named constructor with the offending registration as payload. For operations that can fail, <code>Either e a</code> carries the error or the success. The repository boundary in V3 uses exactly this:</p>
+<pre><code class="language-haskell">newtype VehicleRepository = VehicleRepository
+  { repositoryLookupVehicle :: Registration -&gt; Either VehicleRepositoryError VehicleLookupResult
+  }</code></pre>
+<p><code>Either</code> is the same shape as <code>Result</code> in F#/Rust. Nothing here is <code>null</code>-shaped.</p>
+<h2 id="rust-no-null-option-t-and-result-t-e">Rust — no null, <code>Option&lt;T&gt;</code> and <code>Result&lt;T, E&gt;</code></h2>
+<pre><code class="language-rust">// rust-fuel-engine/src/domain/vehicle.rs
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VehicleLookupResult {
+    Found(Vehicle),
+    NotFound { requested: VehicleRef },
+    Ambiguous { requested: VehicleRef, matches: Vec&lt;VehicleId&gt; },
+    Fatal(FatalError),
+}</code></pre>
+<p>Rust has no <code>null</code> and no implicit nullable references. Absence is <code>Option&lt;T&gt; = Some(T) | None</code>. Fallibility is <code>Result&lt;T, E&gt; = Ok(T) | Err(E)</code>. &quot;Vehicle not found&quot; is a named variant of <code>VehicleLookupResult</code> carrying the requested <code>VehicleRef</code> — the same shape as idiomatic C#.</p>
+<p>At the boundary, deserialisers produce <code>Option&lt;String&gt;</code> for fields that might be missing in the JSON. The mapper turns those into typed parse errors or <code>None</code> for genuinely-optional fields. The classifier never sees an <code>Option&lt;Vehicle&gt;</code> that means &quot;vehicle missing&quot;; if the vehicle is missing, the classifier sees <code>VehicleLookupResult::NotFound { requested }</code>.</p>
+<h2 id="vehicle-not-found-lined-up">&quot;Vehicle not found&quot;, lined up</h2>
+<div class="table-wrap"><table><thead><tr><th>Engine</th><th>How &quot;vehicle not found&quot; is modelled</th><th>What the consumer sees</th></tr></thead><tbody><tr><td>normal C#</td><td><code>Vehicle</code> property = <code>null</code>, <code>VehicleLookupStatus = &quot;NotFound&quot;</code>, <code>Status = &quot;Rejected&quot;</code>, error string in list</td><td>a mutable <code>RowDecision</code> with conventionally-null fields; compile-time null analysis off; debug-print bug strikes here</td></tr><tr><td>idiomatic C#</td><td><code>VehicleLookupResult.NotFound(VehicleIdentifier)</code> — typed sum-type case</td><td>exhaustive switch arm; NRT enforces no spurious null</td></tr><tr><td>F#</td><td><code>VehicleLookupResult.NotFound</code> — DU case with no payload</td><td>pattern match arm; <code>null</code> not assignable to the type</td></tr><tr><td>Haskell</td><td><code>VehicleMissing Registration</code> — ADT constructor with payload</td><td>case expression arm; <code>null</code> not a concept</td></tr><tr><td>Rust</td><td><code>VehicleLookupResult::NotFound { requested: VehicleRef }</code> — enum variant with named field</td><td><code>match</code> arm; no null in the language</td></tr></tbody></table></div>
+<h2 id="where-nulls-actually-live-in-each-engine">Where nulls actually live in each engine</h2>
+<p>Even in the engines that &quot;have no null,&quot; there&#x27;s a boundary story.</p>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart TB
+    subgraph normal[&quot;normal C#&quot;]
+        n1[everywhere]
+    end
+    subgraph idiomatic[&quot;idiomatic C#&quot;]
+        i1[only DTO `string?` fields]
+        i1 -.-&gt;|mapper| i2[domain: no null]
+    end
+    subgraph fsharp[&quot;F#&quot;]
+        f1[CLIMutable DTO can be deserialised to null]
+        f1 -.-&gt;|Interop.fs| f2[domain: no null possible]
+    end
+    subgraph haskell[&quot;Haskell&quot;]
+        h1[no null anywhere; Maybe at boundary]
+    end
+    subgraph rust[&quot;Rust&quot;]
+        r1[no null anywhere; Option at boundary]
+    end</code></pre></figure>
+<p>The shorter that bottom row, the cheaper your null-handling code.</p>
+<p>Normal C# pays everywhere. Idiomatic C# pays at the DTO. F# pays at <code>[&lt;CLIMutable&gt;]</code>. Haskell and Rust don&#x27;t pay — <code>Maybe</code>/<code>Option</code> is the same mechanism throughout, with no special boundary syntax.</p>
+<p>The thing the ladder is really trading off here is <strong>whether &quot;missing&quot; is a value or a hole</strong>. In a hole-based system, every function has to ask &quot;is this thing actually there?&quot; In a value-based system, the type that <em>might</em> be missing names the missing case explicitly, and the function asks &quot;which case is this?&quot;</p>
+<p>The second question has an answer the compiler can check. The first one doesn&#x27;t.</p>
+<p>For the journey version, see <a href="../part1/04-idiomatic-csharp.html">chapter 4 — idiomatic C#</a> on NRT and the typed-absence trick, and <a href="../part1/05-fsharp-native.html">chapter 5 — F# native</a> for the first language on the ladder where null genuinely cannot exist inside the domain.</p>
+    </article>
+    <footer class="pager">
+      <a class="pager-prev" href="r6-mutability.html">Previous: Mutability and identity</a>
+      <a class="pager-next" href="../references.html">Next: references</a>
+    </footer>
+  </main>
+</body>
+</html>

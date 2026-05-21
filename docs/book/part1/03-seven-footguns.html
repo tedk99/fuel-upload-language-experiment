@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Seven footguns - Blub &amp; Fuel</title>
+  <link rel="stylesheet" href="../book.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="book-title" href="../index.html">Blub &amp; Fuel</a>
+    <nav><ol><li><a href="../index.html">Blub &amp; Fuel</a></li><li><a href="../setup.html">Setup</a></li><li><a href="01-blub-paradox.html">The Blub Paradox</a></li><li><a href="02-normal-csharp-tour.html">Tour: the normal C# fuel engine</a></li><li><a href="03-seven-footguns.html" aria-current="page" class="active">Seven footguns</a></li><li><a href="04-idiomatic-csharp.html">Idiomatic C#: same language, modern features on</a></li><li><a href="05-fsharp-native.html">F#: leaving C# behind</a></li><li><a href="06-fsharp-interop.html">F# interop: where the domain meets C#</a></li><li><a href="07-haskell-primer.html">A Haskell primer for C# developers</a></li><li><a href="08-haskell-safety.html">Haskell: making the bug unrepresentable</a></li><li><a href="09-rust-lands.html">Rust: a different goal, the same place</a></li><li><a href="10-the-punch.html">The punch: what each rung made impossible</a></li><li><a href="../part1b/11-boundary-returns.html">The boundary returns</a></li><li><a href="../part1b/12-boundary-side-by-side.html">Four engines at the boundary</a></li><li><a href="../part1b/13-final-takeaway.html">The final takeaway</a></li><li><a href="../part2/r1-decision.html">Modelling the row decision</a></li><li><a href="../part2/r2-validation.html">Validation and warnings</a></li><li><a href="../part2/r3-recovery.html">Duplicate / recovery policy</a></li><li><a href="../part2/r4-boundary.html">The boundary</a></li><li><a href="../part2/r5-exhaustiveness.html">Exhaustiveness</a></li><li><a href="../part2/r6-mutability.html">Mutability and identity</a></li><li><a href="../part2/r7-null.html">Null and absence</a></li><li><a href="../references.html">references</a></li></ol></nav>
+  </aside>
+  <main>
+    <header class="page-header">
+      <p class="kicker">Static reader</p>
+      <h1>Seven footguns</h1>
+      <p class="source-link">Generated from <a href="../../../book/part1/03-seven-footguns.qmd">part1/03-seven-footguns.qmd</a>.</p>
+    </header>
+    <article>
+      <p>The code from the <a href="02-normal-csharp-tour.html">previous chapter</a> ships with at least seven specific failure modes the type system could have refused to compile, if we&#x27;d asked it to. They&#x27;re not subtle judgement calls. They&#x27;re real bugs with concrete production consequences.</p>
+<p>Four of them have failing tests already checked in — under the <code>FuelUploadServiceBugTests</code> class — pinning the buggy behaviour so fixing it would fail the test. That&#x27;s deliberate. Looking at a green test suite and thinking &quot;all good&quot; is half of the problem.</p>
+<p>Here is the map. We&#x27;re going one by one.</p>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart TB
+  subgraph BugMap[&quot;Where the seven footguns hide&quot;]
+    direction TB
+    B1[&quot;#1 LogDecision NREs&lt;br/&gt;on Rejected rows&quot;]
+    B2[&quot;#2 mode == &#x27;Retry&#x27;&lt;br/&gt;case-sensitive&quot;]
+    B3[&quot;#3 Aggressive recovery&lt;br/&gt;missing branch&quot;]
+    B4[&quot;#4 RowDecision.Errors&lt;br/&gt;publicly mutable&quot;]
+    B5[&quot;#5 Status is a string&lt;br/&gt;typos compile fine&quot;]
+    B6[&quot;#6 Validator throws&lt;br/&gt;only first error returned&quot;]
+    B7[&quot;#7 switch statement&lt;br/&gt;no default arm&quot;]
+  end</code></pre></figure>
+<hr>
+<h2 id="footgun-1-nullreferenceexception-in-the-logger">Footgun 1 — NullReferenceException in the logger</h2>
+<p><code>LogDecision</code> reads <code>d.Vehicle.LicensePlate</code> for every row. <code>d.Vehicle</code> is set only on the Found branch of vehicle lookup, so any Rejected or Fatal row that came in with no vehicle leaves that field null.</p>
+<pre><code class="language-csharp">Console.WriteLine(
+    &quot;row &quot; + d.RowNumber +
+    &quot; plate=&quot; + d.Vehicle.LicensePlate +
+    &quot; status=&quot; + d.Status);</code></pre>
+<blockquote><p><code>src/FuelUploadEngine/Services/FuelUploadService.cs</code> lines 159–162</p></blockquote>
+<p><strong>What shipping looks like.</strong> A batch with one bad vehicle reference in the middle takes down the whole upload with an unhandled <code>NullReferenceException</code>. Any rows before it are lost too, because the response is built in a single loop.</p>
+<p><strong>What a type system could prevent it.</strong> Non-nullable reference types (NRT, the C# 8 feature this project disables). With NRT on, <code>Vehicle</code> on <code>RowDecision</code> would have to be declared <code>Vehicle?</code>, and <code>d.Vehicle.LicensePlate</code> would not compile without a null check.</p>
+<p>Pinned by <code>Bug1_NullRefInLoggerWhenVehicleNotFound</code>.</p>
+<hr>
+<h2 id="footgun-2-case-sensitive-mode-string">Footgun 2 — Case-sensitive mode string</h2>
+<p>The upload mode arrives as JSON and is compared with <code>==</code> against the string constants in <code>UploadModes</code>.</p>
+<pre><code class="language-csharp">if (mode == UploadModes.Retry) { ... }</code></pre>
+<blockquote><p><code>src/FuelUploadEngine/Services/DuplicatePolicy.cs</code> line 21</p></blockquote>
+<p>That&#x27;s an ordinal, case-sensitive comparison. Any client that sends <code>&quot;retry&quot;</code> instead of <code>&quot;Retry&quot;</code> — which is what most JS API clients produce — falls through to the final branch and gets <code>&quot;UnknownMode&quot;</code>.</p>
+<p><strong>What shipping looks like.</strong> A retry batch silently does nothing. Every duplicate is reported as <code>Skipped</code> with reason <code>UnknownMode</code>. The batch returns 200 OK, the summary looks healthy, and the actual retry work isn&#x27;t done.</p>
+<p><strong>What a type system could prevent it.</strong> A sum type — an enum at minimum, a discriminated union ideally. The deserializer would either accept <code>&quot;retry&quot;</code> or reject it at the boundary; there is no third option where it silently bypasses the comparison.</p>
+<p>Pinned by <code>Bug2_RetryModeIsCaseSensitive</code>.</p>
+<hr>
+<h2 id="footgun-3-missing-aggressive-recovery-branch">Footgun 3 — Missing aggressive-recovery branch</h2>
+<p>This is the one that costs real money. The aggressive recovery contract says: also accept rows whose previous attempt was <code>FailedAfterCanonicalFinalizationWithoutKey</code> — the canonical write didn&#x27;t actually land, so the row should be re-uploaded.</p>
+<p>That branch is <strong>not in the code</strong>:</p>
+<pre><code class="language-csharp">if (mode == UploadModes.AggressiveRecovery)
+{
+    if (previousOutcome == PreviousOutcomes.FailedBeforeCanonicalFinalization)
+        return true;
+    // NOTE: we should also retry FailedAfterCanonicalFinalizationWithoutKey here
+    // -- the aggressive contract says when the canonical key never landed,
+    // we should re-upload. But this branch was forgotten.
+    skipReason = &quot;AggressiveRecoverySkipped&quot;;
+    return false;
+}</code></pre>
+<blockquote><p><code>src/FuelUploadEngine/Services/DuplicatePolicy.cs</code> lines 41–50</p></blockquote>
+<p>Nothing in the compiler tells you that the <code>(mode, previousOutcome)</code> pair has 24 possible combinations and you&#x27;ve only handled some of them. Both fields are strings. There is no exhaustiveness check.</p>
+<p><strong>What shipping looks like.</strong> Recovery runs report rows as <code>Skipped</code> when they should be <code>Accepted</code>. The skipped rows accumulate as missing transactions that no one notices for a quarter, because the response <em>looks</em> normal — they&#x27;re skipped, not failed.</p>
+<p><strong>What a type system could prevent it.</strong> Exhaustive pattern matching on discriminated unions. F#, Haskell, and Rust will refuse to compile a match that doesn&#x27;t cover every constructor of the input. C# <code>switch</code> <em>expressions</em> on type patterns will warn. C# <code>switch</code> <em>statements</em> on strings won&#x27;t.</p>
+<p>Pinned by <code>Bug3_AggressiveRecovery_MissesFailedAfterCanonicalWithoutKey</code>.</p>
+<hr>
+<h2 id="footgun-4-mutable-response-list">Footgun 4 — Mutable response list</h2>
+<p><code>RowDecision.Errors</code> is a public mutable list field. After the service returns, any caller can mutate it.</p>
+<pre><code class="language-csharp">public List&lt;string&gt; Errors = new List&lt;string&gt;();
+public List&lt;string&gt; Warnings = new List&lt;string&gt;();
+public List&lt;string&gt; QuarantineReasons = new List&lt;string&gt;();</code></pre>
+<blockquote><p><code>src/FuelUploadEngine/Models/RowDecision.cs</code> lines 13–15</p></blockquote>
+<p>There is no defensive copy in the service, no <code>IReadOnlyList&lt;T&gt;</code> wrapper, no <code>ImmutableArray&lt;T&gt;</code>.</p>
+<p><strong>What shipping looks like.</strong> A reporting layer two steps downstream mutates the error list during display formatting. The audit log is rewritten silently. The bug is invisible to the producer of the data because the producer is long-since returned.</p>
+<p><strong>What a type system could prevent it.</strong> Immutable collection types by default (<code>IReadOnlyList&lt;T&gt;</code>, <code>ImmutableArray&lt;T&gt;</code>, F# lists, Haskell lists, Rust ownership semantics). The compiler refuses to give a caller a mutating handle.</p>
+<p>Pinned by <code>Bug4_DecisionListIsMutableByCaller</code>.</p>
+<hr>
+<h2 id="footgun-5-status-is-a-string-typos-compile-fine">Footgun 5 — Status is a string, typos compile fine</h2>
+<p><code>RowDecision.Status</code> is a string. So is <code>VehicleLookupStatus</code>, so is <code>DuplicateStatus</code>, so is <code>PreviousOutcome</code>, so is <code>Mode</code>. Every domain decision in this codebase is communicated as a string.</p>
+<pre><code class="language-csharp">public string Status;     // &quot;Accepted&quot; | &quot;AcceptedWithWarnings&quot; | &quot;Quarantined&quot; | &quot;Skipped&quot; | &quot;Rejected&quot; | &quot;Fatal&quot;</code></pre>
+<blockquote><p><code>src/FuelUploadEngine/Models/RowDecision.cs</code> line 10</p></blockquote>
+<p>A downstream consumer writes <code>if (d.Status == &quot;Quarantied&quot;)</code> (typo). The build is green. The bug ships. The downstream report quietly under-counts the quarantine category by 100%.</p>
+<p><strong>What shipping looks like.</strong> Every string comparison anywhere in the solution — and there are dozens — is a potential instance of this bug. A renamed status (e.g. you decide <code>&quot;AcceptedPending&quot;</code> is a thing) only fails at the consumers who knew to update. The others compile fine and return wrong results.</p>
+<p><strong>What a type system could prevent it.</strong> A sum type — discriminated union, sealed-record hierarchy, enum. A typo in a constructor name fails to compile. Renaming a case forces every consumer to update.</p>
+<p>No pinned test for this one because <em>every string comparison</em> is a potential instance. That&#x27;s the point.</p>
+<hr>
+<h2 id="footgun-6-validator-throws-on-first-failure">Footgun 6 — Validator throws on first failure</h2>
+<p><code>FuelRowValidator.Validate</code> is implemented as a chain of <code>if/throw</code>.</p>
+<pre><code class="language-csharp">if (row.QuantityLiters &lt;= config.MinQuantityLiters)
+    throw new ValidationException(&quot;QuantityNotPositive&quot;);
+
+if (row.QuantityLiters &gt; config.MaxQuantityLiters)
+    throw new ValidationException(&quot;QuantityExceedsMaximum&quot;);
+
+if (row.TotalCost &lt;= 0m)
+    throw new ValidationException(&quot;CostNotPositive&quot;);
+// ...</code></pre>
+<blockquote><p><code>src/FuelUploadEngine/Services/FuelRowValidator.cs</code> lines 15–22</p></blockquote>
+<p>Two consequences. First, throwing on every invalid row is much slower than returning a list — bulk uploads with thousands of bad rows feel sluggish for no good reason. Second, only the first failure is ever reported. A row that is both negative-quantity and over-cost only ever shows <code>QuantityNotPositive</code>. The user fixes that, re-uploads, gets <code>CostNotPositive</code>, fixes that, re-uploads again — three round trips where one would have done.</p>
+<p><strong>What shipping looks like.</strong> Customer support tickets that all read &quot;the upload told me to fix X; I fixed X; now it tells me to fix Y; why didn&#x27;t it just say so the first time?&quot; Slow batch performance under load that profiles back to exception throwing.</p>
+<p><strong>What a type system could prevent it.</strong> A <code>Result&lt;T, IReadOnlyList&lt;Error&gt;&gt;</code> return shape — what F#, Haskell, and Rust make natural. The validator accumulates instead of bailing. C# can do this too; the language just doesn&#x27;t push you toward it the way <code>Either</code> and <code>Result</code> do.</p>
+<hr>
+<h2 id="footgun-7-switch-statement-with-no-default-arm">Footgun 7 — switch statement with no default arm</h2>
+<p><code>ComputeSummary</code> matches on <code>d.Status</code> and increments one counter per known value:</p>
+<pre><code class="language-csharp">switch (d.Status)
+{
+    case &quot;Accepted&quot;: s.Accepted++; break;
+    case &quot;AcceptedWithWarnings&quot;: s.AcceptedWithWarnings++; break;
+    case &quot;Quarantined&quot;: s.Quarantined++; break;
+    case &quot;Skipped&quot;: s.Skipped++; break;
+    case &quot;Rejected&quot;: s.Rejected++; break;
+    case &quot;Fatal&quot;: s.Fatal++; break;
+    // No default branch -- any &quot;new&quot; status string we forget
+    // to handle here will silently fail to be counted.
+}</code></pre>
+<blockquote><p><code>src/FuelUploadEngine/Services/FuelUploadService.cs</code> lines 171–183</p></blockquote>
+<p>Add a new outcome upstream — <code>&quot;AcceptedPending&quot;</code>, say — and the count just vanishes. <code>s.TotalRows</code> keeps incrementing in the outer line above, but no per-status counter catches the new value. The totals stop adding up. No exception is raised.</p>
+<p><strong>What shipping looks like.</strong> A reporting dashboard whose categories no longer sum to the total. Some quiet count of rows is being silently discarded. The bug is found weeks later when someone runs a sanity SQL.</p>
+<p><strong>What a type system could prevent it.</strong> A switch <em>expression</em> on a discriminated union. The C# compiler does warn on non-exhaustive switch expressions over sealed-record hierarchies. F#, Haskell, and Rust make this an error, not a warning. The <code>BatchSummary</code> could also be <strong>derived</strong> from per-row decisions rather than mutated separately, removing the drift between the row outcomes and the summary entirely.</p>
+<hr>
+<h2 id="how-the-seven-chain-into-failure">How the seven chain into failure</h2>
+<p>The bugs above aren&#x27;t independent. They reinforce each other. Here&#x27;s one specific chain that hits production:</p>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart LR
+  A[&quot;Client sends &#x27;retry&#x27;&lt;br/&gt;(footgun 2)&quot;] --&gt; B[&quot;DuplicatePolicy&lt;br/&gt;returns false, reason &#x27;UnknownMode&#x27;&quot;]
+  B --&gt; C[&quot;RowDecision.Status&lt;br/&gt;= &#x27;Skipped&#x27; (footgun 5)&quot;]
+  C --&gt; D[&quot;LogDecision reads&lt;br/&gt;d.Vehicle.LicensePlate&quot;]
+  D --&gt; E[&quot;NRE if vehicle wasn&#x27;t found&lt;br/&gt;(footgun 1)&quot;]
+  E --&gt; F[&quot;Whole batch aborts&lt;br/&gt;caller sees 500&quot;]
+  F --&gt; G[&quot;Audit log mutated&lt;br/&gt;downstream (footgun 4)&quot;]
+  G --&gt; H[&quot;Investigation can&#x27;t&lt;br/&gt;reconstruct what happened&quot;]
+
+  X[&quot;New AcceptedPending&lt;br/&gt;status added&quot;] --&gt; Y[&quot;ComputeSummary&lt;br/&gt;switch silently drops (footgun 7)&quot;]
+  Y --&gt; Z[&quot;Dashboard categories&lt;br/&gt;stop summing to total&quot;]
+
+  P[&quot;AggressiveRecovery batch&lt;br/&gt;(footgun 3)&quot;] --&gt; Q[&quot;Rows silently Skipped&quot;]
+  Q --&gt; R[&quot;Missing transactions&lt;br/&gt;accumulate for a quarter&quot;]</code></pre></figure>
+<p>The three planted test cases (<code>Bug1</code>, <code>Bug2</code>, <code>Bug3</code>, <code>Bug4</code>) pin four of these. The rest are the kind of bug nobody writes a test for because the code looks like ordinary C#.</p>
+<p>Look at the map of features that would have prevented each one:</p>
+<div class="table-wrap"><table><thead><tr><th>#</th><th>Footgun</th><th>Language feature that closes it</th></tr></thead><tbody><tr><td>1</td><td>NRE in logger</td><td>non-nullable reference types</td></tr><tr><td>2</td><td>case-sensitive mode string</td><td>sum type (enum / DU)</td></tr><tr><td>3</td><td>missing recovery branch</td><td>exhaustive pattern matching</td></tr><tr><td>4</td><td>mutable response</td><td>immutable collections by default</td></tr><tr><td>5</td><td>status typos</td><td>sum type</td></tr><tr><td>6</td><td>exception-driven validator</td><td><code>Result&lt;T, errors&gt;</code> return shape</td></tr><tr><td>7</td><td>switch without default</td><td>switch <em>expression</em> + DU</td></tr></tbody></table></div>
+<p>Six of the seven reduce to two ideas: <strong>make illegal states unrepresentable</strong> (sum types) and <strong>force exhaustiveness</strong> (the compiler proves you handled every case). The seventh — the mutable response — is closed by immutability by default.</p>
+<p>The next chapter is the first rung up the ladder. <a href="04-idiomatic-csharp.html">Idiomatic C#</a> keeps the same language and turns on the features this project disabled. Six of the seven footguns go away. The one that remains is the one the .NET runtime structurally cannot prevent — and to close it, we&#x27;ll have to leave C# entirely.</p>
+    </article>
+    <footer class="pager">
+      <a class="pager-prev" href="02-normal-csharp-tour.html">Previous: Tour: the normal C# fuel engine</a>
+      <a class="pager-next" href="04-idiomatic-csharp.html">Next: Idiomatic C#: same language, modern features on</a>
+    </footer>
+  </main>
+</body>
+</html>

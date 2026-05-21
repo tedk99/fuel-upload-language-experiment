@@ -6,9 +6,26 @@ The domain is a fuel upload row classifier. Each implementation is isolated in i
 
 ## The Book — *Blub & Fuel: Five Engines, One Domain*
 
-A 20-chapter Quarto teaching book that walks junior C# developers up the language ladder using these engines as the worked example. Source lives under [`book/`](book/); pre-rendered HTML and EPUB live in `book/_build/` after a render.
+A 20-chapter teaching book walks junior C# developers up the language ladder using these engines as the worked example.
 
-To read or build the book:
+To read it without installing anything, open the static reader at [`docs/book/index.html`](docs/book/index.html). It is generated from the Quarto sources and is intended for checked-in, browser-only reading.
+
+Source lives under [`book/`](book/). To refresh the static reader after editing the book:
+
+```bash
+python3 tools/render_static_book.py
+```
+
+To publish it on the Ubuntu/Docker host:
+
+```bash
+scripts/deploy_book_server.sh
+```
+
+That starts a public static reader on port `8898` and a local-only JupyterLab
+container on port `8899` for file browsing.
+
+If you do have Quarto installed, you can still use the richer Quarto preview/render flow:
 
 ```bash
 # Read locally with live reload
@@ -20,7 +37,7 @@ quarto render                    # -> book/_build/index.html (HTML site)
 quarto render --to epub          # -> book/_build/Blub---Fuel--Five-Engines,-One-Domain.epub
 ```
 
-Prerequisites:
+Quarto-only prerequisites:
 
 - [Quarto](https://quarto.org) 1.5 or newer.
 - For EPUB output with rendered diagrams: `quarto install chrome-headless-shell` (one-time; lets Quarto pre-render the mermaid diagrams to SVG so they appear as images in the EPUB rather than as source code).

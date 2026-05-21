@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Blub Paradox - Blub &amp; Fuel</title>
+  <link rel="stylesheet" href="../book.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="book-title" href="../index.html">Blub &amp; Fuel</a>
+    <nav><ol><li><a href="../index.html">Blub &amp; Fuel</a></li><li><a href="../setup.html">Setup</a></li><li><a href="01-blub-paradox.html" aria-current="page" class="active">The Blub Paradox</a></li><li><a href="02-normal-csharp-tour.html">Tour: the normal C# fuel engine</a></li><li><a href="03-seven-footguns.html">Seven footguns</a></li><li><a href="04-idiomatic-csharp.html">Idiomatic C#: same language, modern features on</a></li><li><a href="05-fsharp-native.html">F#: leaving C# behind</a></li><li><a href="06-fsharp-interop.html">F# interop: where the domain meets C#</a></li><li><a href="07-haskell-primer.html">A Haskell primer for C# developers</a></li><li><a href="08-haskell-safety.html">Haskell: making the bug unrepresentable</a></li><li><a href="09-rust-lands.html">Rust: a different goal, the same place</a></li><li><a href="10-the-punch.html">The punch: what each rung made impossible</a></li><li><a href="../part1b/11-boundary-returns.html">The boundary returns</a></li><li><a href="../part1b/12-boundary-side-by-side.html">Four engines at the boundary</a></li><li><a href="../part1b/13-final-takeaway.html">The final takeaway</a></li><li><a href="../part2/r1-decision.html">Modelling the row decision</a></li><li><a href="../part2/r2-validation.html">Validation and warnings</a></li><li><a href="../part2/r3-recovery.html">Duplicate / recovery policy</a></li><li><a href="../part2/r4-boundary.html">The boundary</a></li><li><a href="../part2/r5-exhaustiveness.html">Exhaustiveness</a></li><li><a href="../part2/r6-mutability.html">Mutability and identity</a></li><li><a href="../part2/r7-null.html">Null and absence</a></li><li><a href="../references.html">references</a></li></ol></nav>
+  </aside>
+  <main>
+    <header class="page-header">
+      <p class="kicker">Static reader</p>
+      <h1>The Blub Paradox</h1>
+      <p class="source-link">Generated from <a href="../../../book/part1/01-blub-paradox.qmd">part1/01-blub-paradox.qmd</a>.</p>
+    </header>
+    <article>
+      <h2 id="a-junior-with-a-50-million-row-problem">A junior with a 50-million-row problem</h2>
+<p>A team is uploading fuel transactions. Lots of them. Some are valid, some are duplicates of previous failed attempts, some are quarantined for manual review, some are rejected outright. The pipeline is small, the business rules are real, and the cost of a bug is measured in misposted fuel charges.</p>
+<p>A junior on the team writes the first version. It builds. The tests pass. The happy path works. Three weeks later, a batch run in production <strong>crashes the whole upload</strong> on the first row whose vehicle isn&#x27;t in the lookup table. Another month later, a quieter bug is found: the aggressive recovery mode silently skips rows it was supposed to reprocess. Three weeks after <em>that</em>, a consumer of the response API breaks because someone typo&#x27;d the status string.</p>
+<p>None of these are bugs of <em>logic</em>. The logic is fine. They are bugs of <strong>what the language let the junior express</strong>.</p>
+<h2 id="what-this-book-is">What this book is</h2>
+<p>This book sets up a deliberately junior-to-mid level C# implementation of that fuel-upload engine, walks through the seven bugs it lets you ship, and then climbs the language ladder one rung at a time — idiomatic C#, F#, Haskell, Rust — showing <strong>which class of bug each rung makes impossible</strong>.</p>
+<h2 id="paul-graham-s-blub-paradox">Paul Graham&#x27;s blub paradox</h2>
+<p>In a 2001 essay, Paul Graham described a paradox programmers fall into:</p>
+<blockquote><p>Programmers, when they compare languages, judge them by their own language as the standard. If they don&#x27;t know language X, then X looks hard to learn, redundant in features they already have, or even — paradoxically — <em>missing</em> features they don&#x27;t realise they&#x27;re missing.</p></blockquote>
+<p>He called the hypothetical mid-power language &quot;Blub.&quot; A Blub programmer looks <strong>down</strong> the power scale and sees obvious deficiencies in weaker languages. A Blub programmer looking <strong>up</strong> sees only weirdness — pointless abstraction, syntactic noise, things they could &quot;do anyway&quot; with enough care.</p>
+<p>The paradox is that <strong>you cannot see what your language is missing while you&#x27;re inside it</strong>. Higher-power languages don&#x27;t make you write less code; they make whole categories of mistake <strong>structurally impossible</strong>. From inside the lower-power language you can&#x27;t see the categories, because your language doesn&#x27;t <em>talk about</em> them.</p>
+<h2 id="the-fuel-engine-five-times">The fuel engine, five times</h2>
+<p>We picked a small but real domain: parse fuel rows → validate them → check the vehicle exists → check for duplicates → apply a recovery policy → either accept, accept-with-warnings, quarantine, skip, or reject the row → summarise the batch. The pipeline shape is the same in all five implementations:</p>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart LR
+    Parse --&gt; Validate --&gt; Vehicle[Vehicle lookup] --&gt; Duplicate[Duplicate check]
+    Duplicate --&gt; Decide{Decide}
+    Decide --&gt; Accept[Accepted]
+    Decide --&gt; AcceptWarn[Accepted with warnings]
+    Decide --&gt; Quarantine[Quarantined]
+    Decide --&gt; Skip[Skipped duplicate]
+    Decide --&gt; Reject[Rejected]
+    Decide --&gt; Fatal[Fatal]
+    Accept --&gt; Summary
+    AcceptWarn --&gt; Summary
+    Quarantine --&gt; Summary
+    Skip --&gt; Summary
+    Reject --&gt; Summary
+    Fatal --&gt; Summary</code></pre></figure>
+<p>What differs across the five implementations is <strong>the type system you have to express that pipeline in</strong>.</p>
+<h2 id="the-ladder">The ladder</h2>
+<p>We&#x27;re going to climb it in this order:</p>
+<ol><li><strong>Normal junior C#</strong> — the version that ships first. No nullable reference types, mutable POCOs everywhere, string-typed status, exception for control flow. We document the <a href="03-seven-footguns.html">seven footguns</a> it makes easy.</li></ol>
+<ol><li><strong>Idiomatic C#</strong> — same language, modern features turned on. Sealed-record discriminated unions, NRT, switch expressions on type patterns, <code>IReadOnlyList&lt;T&gt;</code>. Closes six of the seven footguns. <a href="04-idiomatic-csharp.html">Read it →</a></li></ol>
+<ol><li><strong>F#</strong> — leaves C# behind. Native discriminated unions, exhaustive pattern matching that the compiler <em>enforces</em>, immutability by default, no nulls in F#&#x27;s own types. The footgun list shrinks again. <a href="05-fsharp-native.html">Read it →</a></li></ol>
+<ol><li><strong>Haskell</strong> — the type-driven extreme. Algebraic data types are the <em>natural</em> way to model anything. <code>NonEmpty</code> lets you say &quot;this list has at least one element&quot; <em>at the type level</em>. Side effects are tracked in the signature. <a href="07-haskell-primer.html">Read it →</a></li></ol>
+<ol><li><strong>Rust</strong> — same algebraic types as Haskell, plus <em>ownership</em>. Memory safety without a garbage collector. Exhaustive <code>match</code> enforced by the compiler. A different goal (systems programming) but lands in nearly the same place on this domain. <a href="09-rust-lands.html">Read it →</a></li></ol>
+<p>At each rung we ask the same four questions:</p>
+<ul><li>What does this rung <strong>protect against</strong> that the one below didn&#x27;t?</li><li>What can <strong>still</strong> go wrong?</li><li>Is it <strong>easier or harder</strong> to read?</li><li>How easy is it to <strong>extend</strong> — to add a 7th <code>RowDecision</code> case?</li></ul>
+<h2 id="what-the-book-is-not">What the book is not</h2>
+<p>It is not a polemic for any particular language. The idiomatic C# branch closes six of seven footguns; F# closes them more cheaply; Haskell makes the seventh structurally impossible at the cost of a steeper learning curve; Rust pays for the same guarantees with the borrow checker. There is no free lunch on this ladder. The point is to <strong>see</strong> the tradeoffs, not to ratify a winner.</p>
+<h2 id="how-to-use-it">How to use it</h2>
+<p>If you have an hour, read Part I straight through. The blub-paradox journey lands in one sitting.</p>
+<p>If you want a reference, jump to <a href="../part2/r1-decision.html">Part II</a> — each chapter is one feature (modelling decisions, validation, recovery, exhaustiveness, mutability, null, the boundary) shown five times side-by-side.</p>
+<p>If you&#x27;re skeptical of any chapter&#x27;s claim, the source code is in the same repository under <code>csharp-fuel-engine/</code>, <code>fsharp-fuel-engine/</code>, <code>haskell-fuel-engine/</code>, and <code>rust-fuel-engine/</code>. Build instructions are in <a href="../setup.html">Setup</a>.</p>
+<p>Let&#x27;s start with the version that ships first.</p>
+    </article>
+    <footer class="pager">
+      <a class="pager-prev" href="../setup.html">Previous: Setup</a>
+      <a class="pager-next" href="02-normal-csharp-tour.html">Next: Tour: the normal C# fuel engine</a>
+    </footer>
+  </main>
+</body>
+</html>

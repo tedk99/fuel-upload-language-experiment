@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The boundary returns - Blub &amp; Fuel</title>
+  <link rel="stylesheet" href="../book.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="book-title" href="../index.html">Blub &amp; Fuel</a>
+    <nav><ol><li><a href="../index.html">Blub &amp; Fuel</a></li><li><a href="../setup.html">Setup</a></li><li><a href="../part1/01-blub-paradox.html">The Blub Paradox</a></li><li><a href="../part1/02-normal-csharp-tour.html">Tour: the normal C# fuel engine</a></li><li><a href="../part1/03-seven-footguns.html">Seven footguns</a></li><li><a href="../part1/04-idiomatic-csharp.html">Idiomatic C#: same language, modern features on</a></li><li><a href="../part1/05-fsharp-native.html">F#: leaving C# behind</a></li><li><a href="../part1/06-fsharp-interop.html">F# interop: where the domain meets C#</a></li><li><a href="../part1/07-haskell-primer.html">A Haskell primer for C# developers</a></li><li><a href="../part1/08-haskell-safety.html">Haskell: making the bug unrepresentable</a></li><li><a href="../part1/09-rust-lands.html">Rust: a different goal, the same place</a></li><li><a href="../part1/10-the-punch.html">The punch: what each rung made impossible</a></li><li><a href="11-boundary-returns.html" aria-current="page" class="active">The boundary returns</a></li><li><a href="12-boundary-side-by-side.html">Four engines at the boundary</a></li><li><a href="13-final-takeaway.html">The final takeaway</a></li><li><a href="../part2/r1-decision.html">Modelling the row decision</a></li><li><a href="../part2/r2-validation.html">Validation and warnings</a></li><li><a href="../part2/r3-recovery.html">Duplicate / recovery policy</a></li><li><a href="../part2/r4-boundary.html">The boundary</a></li><li><a href="../part2/r5-exhaustiveness.html">Exhaustiveness</a></li><li><a href="../part2/r6-mutability.html">Mutability and identity</a></li><li><a href="../part2/r7-null.html">Null and absence</a></li><li><a href="../references.html">references</a></li></ol></nav>
+  </aside>
+  <main>
+    <header class="page-header">
+      <p class="kicker">Static reader</p>
+      <h1>The boundary returns</h1>
+      <p class="source-link">Generated from <a href="../../../book/part1b/11-boundary-returns.qmd">part1b/11-boundary-returns.qmd</a>.</p>
+    </header>
+    <article>
+      <h2 id="a-clean-core-is-not-a-clean-system">A clean core is not a clean system</h2>
+<p>In <a href="../part1/01-blub-paradox.html">Part I</a> you watched five rungs of the language ladder close the seven footguns in the <em>domain core</em>. By the time we landed on Rust, the decision engine was pure, the types made impossible states unrepresentable, exhaustive <code>match</code> caught missing cases at compile time, and the batch summary was derived from per-row decisions instead of mutated alongside them. The blub-paradox demo had landed: there was a class of bug each rung made structurally impossible.</p>
+<p>So why is there a Part Ib?</p>
+<p>Because real systems do not take pre-validated <code>ParsedFuelRow</code> values. Real systems take CSV strings. They call a vehicle-lookup service that sometimes times out. They write audit events to a log the ops team actually reads. They emit an operational report that drives a &quot;what uploaded today&quot; dashboard. Every one of those is an <em>edge</em>, a place where the typed domain has to meet messy reality — and every one is a <em>new</em> surface where bad types can sneak back in.</p>
+<p>V2 of this experiment asked: <em>can the language model the domain cleanly?</em> V3 asked a harder question: <em>can the language keep that domain clean when integration arrives?</em></p>
+<p>That is what Part Ib is about.</p>
+<h2 id="what-v3-added">What V3 added</h2>
+<p>The V3 pass kept the V2 domain rules frozen and added four boundary concerns around the pure core:</p>
+<ol><li><strong>CSV-shaped import.</strong> Already-parsed CSV cells (every field a nullable string) flow in. The mapper turns them into typed application DTOs or typed import errors. Nothing about being a CSV cell ever crosses into the decision engine.</li><li><strong>Repository ports.</strong> Vehicle lookup and duplicate history live behind application-layer interfaces. The pure engine sees typed <code>VehicleLookupResult</code> and <code>DuplicateCheckResult</code> values, never a <code>SqlConnection</code> or an HTTP client.</li><li><strong>Audit projection.</strong> A separate projector reads <code>BatchDecision</code> and emits typed audit records, with a clearly-marked string conversion at the very edge where they leave the process.</li><li><strong>Operational batch report.</strong> A second projector reads the same <code>BatchDecision</code> and emits the ops-facing report: counts, uploaded transaction IDs, rejected row numbers, quarantined rows with reasons, and a fatal/ready status.</li></ol>
+<p>The full V3 pipeline looks like this:</p>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart LR
+    CSV[CSV rows: strings, nullable cells] --&gt; ImportMapper[Import mapper]
+    ImportMapper --&gt;|valid| AppDto[Application DTO request]
+    ImportMapper --&gt;|invalid| ImportErrors[Typed import errors]
+    AppDto --&gt; RepoService[Repository-backed service]
+    VehiclePort[Vehicle repository port] --&gt; RepoService
+    DuplicatePort[Duplicate repository port] --&gt; RepoService
+    RepoService --&gt; DomainInput[Typed row contexts]
+    DomainInput --&gt; Engine[Pure classifier]
+    Engine --&gt; Decision[BatchDecision]
+    Decision --&gt; AuditProj[Audit projector]
+    Decision --&gt; ReportProj[Operational report projector]
+    AuditProj --&gt; Audit[AuditRecord DTOs]
+    ReportProj --&gt; Report[OperationalBatchReport]</code></pre></figure>
+<p>The V2 work lives entirely inside the <code>Engine</code> box. Everything outside that box is new in V3, and everything outside that box is where the seven footguns try to make a comeback.</p>
+<h2 id="why-this-is-the-real-test">Why this is the real test</h2>
+<p>The V2 lesson — <em>types make domain bugs structurally impossible</em> — is true but incomplete. Anyone can write a clean pure function. The question is whether you can wire it to a CSV parser, three repositories, an audit log, and an ops dashboard without the CSV parser&#x27;s strings, the repository&#x27;s nulls, the log&#x27;s free-text status field, and the dashboard&#x27;s mutable counters creeping back into your decision types.</p>
+<p>That is a different skill from &quot;model the domain.&quot; It is the skill of <em>holding a boundary</em>.</p>
+<p>V3 is the test of that skill. The same four languages from V2 — C#, F#, Haskell, Rust — get the same four boundary concerns added. The V2 scoring put Haskell first; the V3 scoring does not. The boundary changes the answer.</p>
+<p>The reason is intuitive once you look at it:</p>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart TB
+    subgraph Outside[The messy world]
+        CSVcells[CSV cells: strings, nullable]
+        RepoCalls[Repository calls: IO, failure]
+        AuditText[Audit log: external text]
+        ReportPayload[Ops report: serialised JSON]
+    end
+
+    subgraph Inside[The typed core]
+        Mode[UploadMode]
+        Row[ParsedFuelRow]
+        Lookups[VehicleLookupResult, DuplicateCheckResult]
+        Decision[BatchDecision]
+    end
+
+    CSVcells -. parse to .-&gt; Row
+    RepoCalls -. translate to .-&gt; Lookups
+    Decision -. project to .-&gt; AuditText
+    Decision -. project to .-&gt; ReportPayload
+
+    CSVcells -. must not flow into .-&gt; Decision
+    RepoCalls -. must not flow into .-&gt; Decision
+    AuditText -. must not flow back into .-&gt; Decision</code></pre></figure>
+<p>The arrows that <em>should</em> be there are typed translations at the edge. The arrows that <em>should not</em> be there are the bugs. A junior writing this code for the first time has to actively resist drawing them. A mid-level engineer writes them by accident in the third file of a six-file PR. The question V3 asks is: <strong>which language makes the missing arrows hard to draw?</strong></p>
+<h2 id="the-five-risks-at-every-boundary">The five risks at every boundary</h2>
+<p>When you sit a junior down in front of the V3 pipeline, here are the five concrete things they tend to ship. They are not exotic. Each one is a single line of code at the edge that quietly undoes the V2 lesson.</p>
+<ol><li><strong>Raw string statuses sneaking back into domain code.</strong> The audit layer needs an external status text like <code>&quot;accepted_with_warnings&quot;</code>. Once that string is in scope, it is one paste away from being the <em>input</em> to the next layer&#x27;s switch statement. Strong tip: produce the string at the <em>very last</em> boundary, never before.</li></ol>
+<ol><li><strong>Nullable/default DTO construction violating non-empty invariants.</strong> In V2 we worked hard to make <code>AcceptedTransaction</code> carry a real <code>Vehicle</code> and a real <code>TransactionKey</code>. The DTO layer hands you back nullable strings, and <code>with { TransactionKey = null }</code> compiles. F#&#x27;s <code>[&lt;CLIMutable&gt;]</code> records, C#&#x27;s record <code>with</code> updates, Rust&#x27;s <code>Option&lt;String&gt;</code> — every one of these can hand you an &quot;accepted&quot; row whose key is empty if you are not paying attention.</li></ol>
+<ol><li><strong>Loose numeric types for money and quantity.</strong> The pure engine uses <code>decimal</code>/<code>Rational</code>/<code>Decimal</code> because rounding matters. The DTO layer takes a string and parses it. If you parse to <code>f64</code> / <code>Double</code> because that is what <code>parse::&lt;f64&gt;()</code> returns, you have reintroduced floating point into a financial calculation at the boundary. The V3 audit caught this in Rust: monetary values round-tripped through <code>f64</code>.</li></ol>
+<ol><li><strong>Repository failures losing detail.</strong> When the vehicle-lookup service times out, the typed-error part of you wants to say <code>RepositoryError::TimedOut { duration: 7s, endpoint: &quot;...&quot; }</code>. The tired part of you collapses that into &quot;this row is fatal&quot; and forgets the detail. The V3 audit caught this in both C# and Rust: the repository result was translated <em>first</em> into a DTO status string, <em>then</em> re-parsed back into a domain <code>Fatal</code> variant. The round-trip discarded everything in between.</li></ol>
+<ol><li><strong>Summary/report logic duplicating per-row decision logic.</strong> The ops report needs to count &quot;accepted with warnings.&quot; The naive implementation iterates the raw input rows and re-decides what counts as accepted. Now you have two classifiers, and they will drift. The V2 lesson — <em>derive the summary from decisions</em> — has to hold at the report boundary too. The V3 phase briefing called this out specifically: the counterexample is the report projector that inspects <code>csvRows</code> and tracks <code>accepted</code> and <code>skipped</code> in mutable counters; the good shape is the projector that reads <code>BatchDecision</code> and never looks at the raw input again.</li></ol>
+<p>All four V3 implementations close some of these risks; none closes all five. The honest cross-language picture is the next chapter.</p>
+<h2 id="what-v2-was-and-was-not">What V2 was and was not</h2>
+<p>It is worth being explicit about what the V2 audit <em>did</em> test, so the V3 lesson lands without sounding like a contradiction.</p>
+<p>V2 took the pure decision engine and pushed five rounds of change through it: split a monolith into modules, add a new <code>Quarantined</code> outcome with typed reasons, split <code>Recovery</code> mode into conservative and aggressive variants, add a thin DTO mapping layer, score the result. At every step the V2 audit checked the same V1 footguns — raw status strings, nullable accepted transactions, boolean soup in duplicate state, mutated summaries — and confirmed that each idiomatic implementation either prevented the bug or made it harder to write.</p>
+<p>What V2 did <em>not</em> push hard on:</p>
+<ul><li>a CSV-shaped import that has to handle bad cells, not just well-typed DTOs;</li><li>repository lookups that can fail mid-batch and have to be translated into typed outcomes;</li><li>a separate audit projection that emits records to a log other systems consume;</li><li>an ops report that consumers will read once and assume is honest.</li></ul>
+<p>Each of those is a new boundary. Each one re-opens the same V1 footguns. V3 made that explicit by adding all four at once.</p>
+<p>The four V3 implementations did not regress on V2 rules. The decision engine in each language is still pure, still produces typed outcomes, still derives the summary from decisions. What V3 surfaced is the <em>surface area</em> the integration adds. That surface area is where the ranking flipped.</p>
+<h2 id="what-s-next">What&#x27;s next</h2>
+<p><a href="12-boundary-side-by-side.html">Chapter 12</a> walks all four engines through all four boundary concerns side-by-side, with real code from each implementation. It is the longest chapter in the book because the boundary is where most of the engineering effort lives in production.</p>
+<p><a href="13-final-takeaway.html">Chapter 13</a> is the final takeaway: what to recommend a junior developer do in a real .NET shop, given everything the two halves of this book have shown.</p>
+<p>If you want the scoring rationale up front, the <a href="https://github.com/tedk99/experiment-normalcsharp/blob/main/docs/v3-results.md">V3 results document</a> has every score and verdict. The short version: the V2 winner is not the V3 winner, and the reason is the boundary.</p>
+    </article>
+    <footer class="pager">
+      <a class="pager-prev" href="../part1/10-the-punch.html">Previous: The punch: what each rung made impossible</a>
+      <a class="pager-next" href="12-boundary-side-by-side.html">Next: Four engines at the boundary</a>
+    </footer>
+  </main>
+</body>
+</html>

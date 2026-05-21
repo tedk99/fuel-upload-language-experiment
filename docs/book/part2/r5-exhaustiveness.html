@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Exhaustiveness - Blub &amp; Fuel</title>
+  <link rel="stylesheet" href="../book.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="book-title" href="../index.html">Blub &amp; Fuel</a>
+    <nav><ol><li><a href="../index.html">Blub &amp; Fuel</a></li><li><a href="../setup.html">Setup</a></li><li><a href="../part1/01-blub-paradox.html">The Blub Paradox</a></li><li><a href="../part1/02-normal-csharp-tour.html">Tour: the normal C# fuel engine</a></li><li><a href="../part1/03-seven-footguns.html">Seven footguns</a></li><li><a href="../part1/04-idiomatic-csharp.html">Idiomatic C#: same language, modern features on</a></li><li><a href="../part1/05-fsharp-native.html">F#: leaving C# behind</a></li><li><a href="../part1/06-fsharp-interop.html">F# interop: where the domain meets C#</a></li><li><a href="../part1/07-haskell-primer.html">A Haskell primer for C# developers</a></li><li><a href="../part1/08-haskell-safety.html">Haskell: making the bug unrepresentable</a></li><li><a href="../part1/09-rust-lands.html">Rust: a different goal, the same place</a></li><li><a href="../part1/10-the-punch.html">The punch: what each rung made impossible</a></li><li><a href="../part1b/11-boundary-returns.html">The boundary returns</a></li><li><a href="../part1b/12-boundary-side-by-side.html">Four engines at the boundary</a></li><li><a href="../part1b/13-final-takeaway.html">The final takeaway</a></li><li><a href="r1-decision.html">Modelling the row decision</a></li><li><a href="r2-validation.html">Validation and warnings</a></li><li><a href="r3-recovery.html">Duplicate / recovery policy</a></li><li><a href="r4-boundary.html">The boundary</a></li><li><a href="r5-exhaustiveness.html" aria-current="page" class="active">Exhaustiveness</a></li><li><a href="r6-mutability.html">Mutability and identity</a></li><li><a href="r7-null.html">Null and absence</a></li><li><a href="../references.html">references</a></li></ol></nav>
+  </aside>
+  <main>
+    <header class="page-header">
+      <p class="kicker">Static reader</p>
+      <h1>Exhaustiveness</h1>
+      <p class="source-link">Generated from <a href="../../../book/part2/r5-exhaustiveness.qmd">part2/r5-exhaustiveness.qmd</a>.</p>
+    </header>
+    <article>
+      <h2 id="i-added-a-7th-rowdecision-case">&quot;I added a 7th <code>RowDecision</code> case.&quot;</h2>
+<p>This is the chapter where the ladder bites hardest. Imagine product asks for a new outcome:</p>
+<blockquote><p><code>Throttled</code> — the row is fine, but the upstream API rate-limited us. Re-queue it for later. Do not skip, do not reject.</p></blockquote>
+<p>You add the case. What happens?</p>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">stateDiagram-v2
+    direction LR
+    [*] --&gt; Added: Add Throttled case
+    Added --&gt; NormalCS: normal C#
+    Added --&gt; IdiomaticCS: idiomatic C#
+    Added --&gt; Fsharp: F#
+    Added --&gt; Haskell: Haskell
+    Added --&gt; Rust: Rust
+
+    NormalCS --&gt; Silent: 0 errors, 0 warnings
+    Silent --&gt; Production: ships
+    Production --&gt; BugReport: misposted batches
+
+    IdiomaticCS --&gt; Runtime: build green
+    Runtime --&gt; RuntimeThrow: InvalidOperationException at first match
+    RuntimeThrow --&gt; Hotfix
+
+    Fsharp --&gt; WarningF: FS0025 non-exhaustive match
+    WarningF --&gt; WerrorF: --warnaserror -&gt; compile error
+    WerrorF --&gt; Caught
+
+    Haskell --&gt; CompileH: -Wall + -Werror -&gt; compile error
+    CompileH --&gt; Caught
+
+    Rust --&gt; CompileR: E0004 non-exhaustive patterns
+    CompileR --&gt; Caught</code></pre></figure>
+<p>Five engines, five different moments at which the compiler tells you about the missing case (or doesn&#x27;t).</p>
+<h2 id="normal-c-silent">Normal C# — silent</h2>
+<p>Add <code>public const string Throttled = &quot;Throttled&quot;;</code> to your row&#x27;s <code>Status</code> field. Now go look at the consumer:</p>
+<pre><code class="language-csharp">// normalcsharp-fuel-engine/src/FuelUploadEngine/Services/FuelUploadService.cs
+switch (d.Status)
+{
+    case &quot;Accepted&quot;:              s.Accepted++; break;
+    case &quot;AcceptedWithWarnings&quot;:  s.AcceptedWithWarnings++; break;
+    case &quot;Quarantined&quot;:           s.Quarantined++; break;
+    case &quot;Skipped&quot;:               s.Skipped++; break;
+    case &quot;Rejected&quot;:              s.Rejected++; break;
+    case &quot;Fatal&quot;:                 s.Fatal++; break;
+    // No default branch -- any &quot;new&quot; status string we forget
+    // to handle here will silently fail to be counted.
+}</code></pre>
+<p>No default branch. Throttled rows are produced (somewhere) and then <strong>silently dropped from the summary counts</strong>. The totals stop adding up. No test fails. No exception is thrown. Production keeps running. The bug is discovered three weeks later when finance reconciles.</p>
+<p>This is footgun #7 in <a href="../part1/03-seven-footguns.html">the seven footguns chapter</a>.</p>
+<h2 id="idiomatic-c-runtime-throw">Idiomatic C# — runtime throw</h2>
+<pre><code class="language-csharp">return decision switch
+{
+    RowDecision.AcceptedTransaction accepted        =&gt; /* ... */,
+    RowDecision.AcceptedTransactionWithWarnings ... =&gt; /* ... */,
+    RowDecision.QuarantinedRow quarantined          =&gt; /* ... */,
+    RowDecision.SkippedDuplicate skipped            =&gt; /* ... */,
+    RowDecision.RejectedRow rejected                =&gt; /* ... */,
+    RowDecision.FatalProcessingError fatal          =&gt; /* ... */,
+    _ =&gt; throw new InvalidOperationException(&quot;Unhandled row decision.&quot;)
+};</code></pre>
+<p>You add <code>RowDecision.ThrottledRow</code>. The code compiles — the <code>_ =&gt;</code> default catches it. Tests probably pass (none of them produce a <code>ThrottledRow</code> yet). The bug ships. First production batch that emits a <code>Throttled</code> row crashes the response mapper at the runtime throw.</p>
+<p>This is <strong>strictly better than normal C#</strong>: the failure is loud, the stack trace points at the unhandled case. But it&#x27;s still runtime, and the compiler had all the information it needed to refuse the build. It just doesn&#x27;t.</p>
+<p>The reason is that C#&#x27;s exhaustiveness analysis for switch expressions on sealed-record hierarchies is <strong>best-effort</strong> — the compiler can warn about a few obvious patterns (omitting <code>null</code>, omitting a known case in some configurations) but it does not in general prove that the listed patterns cover the closed hierarchy. The default arm is required boilerplate, and once you have it the warning goes away.</p>
+<h2 id="f-non-exhaustive-match-warning">F# — non-exhaustive match warning</h2>
+<pre><code class="language-fsharp">match decision with
+| RowDecision.Accepted t -&gt; /* ... */
+| RowDecision.AcceptedWithWarnings (t, ws) -&gt; /* ... */
+| RowDecision.Quarantined q -&gt; /* ... */
+| RowDecision.SkippedDuplicate s -&gt; /* ... */
+| RowDecision.Rejected r -&gt; /* ... */
+| RowDecision.Fatal f -&gt; /* ... */</code></pre>
+<p>Add <code>| Throttled of ThrottledRow</code> to the union. <strong>Every</strong> match expression in the codebase that pattern-matched on <code>RowDecision</code> lights up with <strong>warning FS0025</strong>:</p>
+<pre><code class="language-text">warning FS0025: Incomplete pattern matches on this expression.
+For example, the value &#x27;Throttled (_)&#x27; may indicate a case not covered by the pattern(s).</code></pre>
+<p>This is <em>configurable</em>. By default F# treats FS0025 as a warning. With <code>&lt;WarningsAsErrors&gt;FS0025&lt;/WarningsAsErrors&gt;</code> (or <code>--warnaserror</code> in the build), it becomes a compile error. The Fieldale F# engine ships with that promotion on, so the build <em>refuses</em> to compile until every match is fixed.</p>
+<p>The warning lists the missing constructor by name. The fix is trivial. The bug never reaches a test, let alone production.</p>
+<h2 id="haskell-wall-werror">Haskell — <code>-Wall -Werror</code></h2>
+<pre><code class="language-haskell">case decision of
+  Accepted t                 -&gt; /* ... */
+  AcceptedWithWarnings t ws  -&gt; /* ... */
+  Quarantined t rs           -&gt; /* ... */
+  SkippedDuplicate s         -&gt; /* ... */
+  Rejected r                 -&gt; /* ... */
+  Fatal f                    -&gt; /* ... */</code></pre>
+<p>GHC&#x27;s <code>-Wincomplete-patterns</code> warns on the missing constructor. The project&#x27;s <code>cabal.project</code> sets <code>-Wall -Werror</code>, which promotes every warning to an error.</p>
+<pre><code class="language-text">src/FuelUpload/DecisionEngine.hs:42:3: error: [-Wincomplete-patterns, -Werror=incomplete-patterns]
+    Pattern match(es) are non-exhaustive
+    In a case alternative: Patterns of type &#x27;RowDecision&#x27; not matched: Throttled _</code></pre>
+<p>The build fails. Every place the missing case affects fails at the same time. No production exposure.</p>
+<p>Haskell goes a step further than F# here: there&#x27;s no concept of &quot;the default arm&quot; in idiomatic Haskell. You don&#x27;t write <code>_ -&gt; error &quot;unreachable&quot;</code>. The intended idiom is to <strong>list every constructor</strong>, and the compiler&#x27;s job is to confirm the list is complete.</p>
+<h2 id="rust-compile-error-no-opt-out">Rust — compile error, no opt-out</h2>
+<pre><code class="language-rust">match decision {
+    RowDecision::Accepted(t)               =&gt; /* ... */,
+    RowDecision::Warning { transaction, warnings } =&gt; /* ... */,
+    RowDecision::Quarantined { .. }        =&gt; /* ... */,
+    RowDecision::SkippedDuplicate(s)       =&gt; /* ... */,
+    RowDecision::Rejected(r)               =&gt; /* ... */,
+    RowDecision::Fatal(f)                  =&gt; /* ... */,
+}</code></pre>
+<p>Add <code>Throttled(ThrottledRow)</code> to the enum. Rust&#x27;s compiler:</p>
+<pre><code class="language-text">error[E0004]: non-exhaustive patterns: `RowDecision::Throttled(_)` not covered
+  --&gt; src/engine/classifier.rs:42:11
+   |
+42 |     match decision {
+   |           ^^^^^^^^ pattern `RowDecision::Throttled(_)` not covered</code></pre>
+<p>This is <strong>not a warning that you opted into</strong>. It is the language&#x27;s type-checker refusing to compile a <code>match</code> that does not cover the domain. There is no <code>--allow-non-exhaustive-match</code> flag. The only way past this error is to add the arm.</p>
+<p><code>cargo test</code> doesn&#x27;t even reach the test phase. The build fails. The PR cannot be merged.</p>
+<h2 id="the-ladder">The ladder</h2>
+<div class="table-wrap"><table><thead><tr><th>Engine</th><th>Detection of new variant</th><th>Default arm?</th><th>Can be opted out?</th><th>Production exposure if forgotten</th></tr></thead><tbody><tr><td>normal C#</td><td>none (strings)</td><td>implicit no-op</td><td>n/a</td><td>full — silent miscount</td></tr><tr><td>idiomatic C#</td><td>runtime, on first hit</td><td>required <code>_ =&gt; throw</code></td><td>n/a</td><td>partial — loud crash on first new row</td></tr><tr><td>F#</td><td>compile warning FS0025</td><td>optional <code>_ -&gt; ...</code></td><td>yes (default is warning)</td><td>none if <code>--warnaserror</code> is on</td></tr><tr><td>Haskell</td><td>compile error with <code>-Wall -Werror</code></td><td>not idiomatic</td><td>yes (<code>-Wno-incomplete-patterns</code>)</td><td>none with project defaults</td></tr><tr><td>Rust</td><td>compile error E0004</td><td>not allowed</td><td><strong>no</strong></td><td>none</td></tr></tbody></table></div>
+<h2 id="what-exhaustive-buys-you">What &quot;exhaustive&quot; buys you</h2>
+<p>The reason exhaustiveness matters is not that you&#x27;ll forget to handle a case <strong>today</strong>. You won&#x27;t — when you add <code>Throttled</code>, you&#x27;re aware of it. The reason it matters is that <strong>the next person to touch the domain three years from now</strong> also won&#x27;t forget, because they can&#x27;t. The compiler will not let them.</p>
+<p>In a domain like fuel upload — where the decision type is the audit trail, and where missing a case means misposted money — that property is worth measurable engineering hours per year. It&#x27;s also the single hardest property to retrofit. Once you&#x27;ve adopted &quot;the default arm is fine&quot;, the discipline that prevents footgun #7 is no longer mechanical; it depends on every engineer remembering, every time, to check every consumer of every sum type.</p>
+<p>The compiler is cheaper.</p>
+<p>For the narrative version, see <a href="../part1/05-fsharp-native.html">chapter 5 — F# native features</a> and the journey&#x27;s &quot;how easy is it to extend?&quot; question.</p>
+    </article>
+    <footer class="pager">
+      <a class="pager-prev" href="r4-boundary.html">Previous: The boundary</a>
+      <a class="pager-next" href="r6-mutability.html">Next: Mutability and identity</a>
+    </footer>
+  </main>
+</body>
+</html>

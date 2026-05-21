@@ -1,0 +1,16 @@
+.git/
+.claude/
+.quarto/
+.quarto-cli/
+.venv-jupyter-book/
+**/__pycache__/
+**/._*
+**/.DS_Store
+**/bin/
+**/obj/
+**/dist/
+**/dist-newstyle/
+**/node_modules/
+**/target/
+**/.spago/
+**/output/

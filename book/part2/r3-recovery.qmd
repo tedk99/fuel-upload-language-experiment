@@ -34,7 +34,7 @@ flowchart TD
     A2 -- no --> Skip
 ```
 
-## Normal C# — booleans and string equality
+## Normal C# -- booleans and string equality
 
 ```csharp
 // normalcsharp-fuel-engine/src/FuelUploadEngine/Services/DuplicatePolicy.cs
@@ -67,7 +67,7 @@ public static bool ShouldAcceptDuplicate(string mode, string previousOutcome, ou
 }
 ```
 
-`mode` and `previousOutcome` are strings — runtime equality on
+`mode` and `previousOutcome` are strings -- runtime equality on
 constants from `UploadModes` and `PreviousOutcomes`. The aggressive
 case has a literal `// NOTE` admitting the missing branch. The
 language can't see that one of six previous-outcome strings has gone
@@ -75,7 +75,7 @@ unhandled in this mode, because as far as C# is concerned the
 universe of legal strings is infinite. The bug ships and stays
 shipped.
 
-## Idiomatic C# — switch expression on sealed records
+## Idiomatic C# -- switch expression on sealed records
 
 ```csharp
 // csharp-fuel-engine/src/FuelUploadEngine/Engine/DuplicatePolicy.cs
@@ -101,18 +101,18 @@ return mode switch
 
 `UploadMode` is an enum, `PreviousUploadOutcome` is a sealed-record
 DU, `CanonicalTransactionKeyState` is a sealed-record DU. The
-aggressive case has the **two-branch acceptance** explicit — the
+aggressive case has the **two-branch acceptance** explicit -- the
 "failed before canonical" branch *and* the "failed after canonical
 with missing key" branch.
 
 But notice the `_ =>` at the bottom: a default arm that throws. The
 compiler cannot prove the previous arms exhaust the cross product of
-`UploadMode × PreviousUploadOutcome × CanonicalTransactionKeyState`,
+`UploadMode x PreviousUploadOutcome x CanonicalTransactionKeyState`,
 so the safety net is a runtime throw. Drop a single mode and the bug
 moves from "silent miscount" to "loud `InvalidOperationException`",
-which is better — but it's a runtime check, not a compile-time one.
+which is better -- but it's a runtime check, not a compile-time one.
 
-## F# — pattern match on the union
+## F# -- pattern match on the union
 
 ```fsharp
 // fsharp-fuel-engine/FuelUpload.Domain/Duplicate.fs and DecisionEngine.fs
@@ -148,7 +148,7 @@ up. The aggressive case's two upload branches are visible side-by-side;
 the "did we forget one?" question is the compiler's job, not the
 reader's.
 
-## Haskell — guards on a function with full ADT match
+## Haskell -- guards on a function with full ADT match
 
 ```haskell
 -- haskell-fuel-engine/src/FuelUpload/DuplicatePolicy.hs
@@ -183,7 +183,7 @@ both `UploadDuplicate` guards distinctly; a third mode like
 `Throttled` would refuse to compile until this function had a clause
 for it.
 
-## Rust — `match` on a tuple, fully exhaustive
+## Rust -- `match` on a tuple, fully exhaustive
 
 ```rust
 // rust-fuel-engine/src/engine/duplicate_policy.rs
@@ -222,7 +222,7 @@ match (mode, duplicate_check) {
 ```
 
 No `_ => unreachable!()`. The match is **structurally exhaustive on
-the tuple** — Rust's compiler walks the product of all variants and
+the tuple** -- Rust's compiler walks the product of all variants and
 refuses to compile if any combination is unmatched. The aggressive
 case spells out the two acceptance branches *and* the catch-all
 skip; if a future change adds a `FinalizationState::SuspendedForReview`,

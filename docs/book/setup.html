@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Setup - Blub &amp; Fuel</title>
+  <link rel="stylesheet" href="book.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="book-title" href="index.html">Blub &amp; Fuel</a>
+    <nav><ol><li><a href="index.html">Blub &amp; Fuel</a></li><li><a href="setup.html" aria-current="page" class="active">Setup</a></li><li><a href="part1/01-blub-paradox.html">The Blub Paradox</a></li><li><a href="part1/02-normal-csharp-tour.html">Tour: the normal C# fuel engine</a></li><li><a href="part1/03-seven-footguns.html">Seven footguns</a></li><li><a href="part1/04-idiomatic-csharp.html">Idiomatic C#: same language, modern features on</a></li><li><a href="part1/05-fsharp-native.html">F#: leaving C# behind</a></li><li><a href="part1/06-fsharp-interop.html">F# interop: where the domain meets C#</a></li><li><a href="part1/07-haskell-primer.html">A Haskell primer for C# developers</a></li><li><a href="part1/08-haskell-safety.html">Haskell: making the bug unrepresentable</a></li><li><a href="part1/09-rust-lands.html">Rust: a different goal, the same place</a></li><li><a href="part1/10-the-punch.html">The punch: what each rung made impossible</a></li><li><a href="part1b/11-boundary-returns.html">The boundary returns</a></li><li><a href="part1b/12-boundary-side-by-side.html">Four engines at the boundary</a></li><li><a href="part1b/13-final-takeaway.html">The final takeaway</a></li><li><a href="part2/r1-decision.html">Modelling the row decision</a></li><li><a href="part2/r2-validation.html">Validation and warnings</a></li><li><a href="part2/r3-recovery.html">Duplicate / recovery policy</a></li><li><a href="part2/r4-boundary.html">The boundary</a></li><li><a href="part2/r5-exhaustiveness.html">Exhaustiveness</a></li><li><a href="part2/r6-mutability.html">Mutability and identity</a></li><li><a href="part2/r7-null.html">Null and absence</a></li><li><a href="references.html">references</a></li></ol></nav>
+  </aside>
+  <main>
+    <header class="page-header">
+      <p class="kicker">Static reader</p>
+      <h1>Setup</h1>
+      <p class="source-link">Generated from <a href="../../book/setup.qmd">setup.qmd</a>.</p>
+    </header>
+    <article>
+      <h1 id="running-the-code-yourself">Running the code yourself</h1>
+<p>You don&#x27;t need any of this to <em>read</em> the book — the chapters quote the real source and explain everything. But the lessons stick harder when you can break something and watch the compiler complain.</p>
+<h2 id="the-five-engines">The five engines</h2>
+<p>Each implementation lives in a sibling directory:</p>
+<pre><code class="language-text">experiment-normalcsharp/
+├── book/                       # this Quarto book lives here
+├── normalcsharp-fuel-engine/   # the &quot;junior C#&quot; version
+├── csharp-fuel-engine/         # idiomatic C#
+├── fsharp-fuel-engine/         # F#
+├── haskell-fuel-engine/        # Haskell
+└── rust-fuel-engine/           # Rust</code></pre>
+<h2 id="build-and-test-each-one">Build and test each one</h2>
+<div class="table-wrap"><table><thead><tr><th>Engine</th><th>Toolchain</th><th>Build</th><th>Test</th></tr></thead><tbody><tr><td>Normal C#</td><td>.NET 10 SDK</td><td><code>dotnet build NormalCSharpFuelEngine.slnx</code></td><td><code>dotnet test</code></td></tr><tr><td>C#</td><td>.NET 10 SDK</td><td><code>dotnet build FuelUploadEngine.slnx</code></td><td><code>dotnet test</code></td></tr><tr><td>F#</td><td>.NET 10 SDK</td><td><code>dotnet build FSharpFuelEngine.slnx</code></td><td><code>dotnet test</code></td></tr><tr><td>Haskell</td><td>GHC 9.4+ + cabal</td><td><code>cabal build</code></td><td><code>cabal test</code></td></tr><tr><td>Rust</td><td>rustc 1.80+ + cargo</td><td><code>cargo build</code></td><td><code>cargo test</code></td></tr></tbody></table></div>
+<p>Install pointers:</p>
+<ul><li><strong>.NET 10 SDK</strong> — &lt;https://dotnet.microsoft.com/download&gt;</li><li><strong>GHC + cabal</strong> — easiest via <a href="https://www.haskell.org/ghcup/">GHCup</a></li><li><strong>Rust</strong> — <code>curl --proto &#x27;=https&#x27; --tlsv1.2 -sSf https://sh.rustup.rs | sh</code></li></ul>
+<h2 id="reading-this-book-without-quarto">Reading this book without Quarto</h2>
+<p>The repository includes a pre-rendered static reader at <code>docs/book/index.html</code>. Open that file in a browser if you only want to read the book; no Quarto, Jupyter kernels, language toolchains, or headless Chrome are needed.</p>
+<h2 id="rendering-this-book">Rendering this book</h2>
+<p>The book is built with <a href="https://quarto.org">Quarto</a>. To re-render it:</p>
+<pre><code class="language-bash">cd book
+quarto render             # HTML (default) -&gt; book/_build/
+quarto render --to epub   # EPUB -&gt; book/_build/Blub-and-Fuel.epub
+quarto preview            # live-reload local server</code></pre>
+<h2 id="optional-turning-on-the-runnable-code-cells">Optional: turning on the runnable code cells</h2>
+<p>Some chapters in Part II contain C# and F# snippets that <em>can</em> run live during render — you see the actual output baked into the page. Today they&#x27;re rendered as static snippets. To enable execution:</p>
+<pre><code class="language-bash"># 1. Install Jupyter (the kernel host)
+python3 -m pip install --user jupyter
+
+# 2. Install the .NET Interactive global tool
+dotnet tool install --global Microsoft.dotnet-interactive
+
+# 3. Register the C# / F# / PowerShell kernels with Jupyter
+dotnet interactive jupyter install
+
+# 4. Verify
+jupyter kernelspec list   # should show .net-csharp and .net-fsharp</code></pre>
+<p>Then re-render with <code>quarto render</code>. The cells marked <code>{dotnet-csharp}</code> and <code>{dotnet-fsharp}</code> will execute and embed their output.</p>
+<h2 id="haskell-and-rust-cells">Haskell and Rust cells</h2>
+<p>Quarto can render fenced Haskell and Rust code blocks with syntax highlighting, but it does not execute them inline the way it does C#/F# via the .NET Interactive kernel. For those, the book quotes real source from <code>haskell-fuel-engine/</code> and <code>rust-fuel-engine/</code>, and you can run them in their own toolchains using the commands in the table above.</p>
+    </article>
+    <footer class="pager">
+      <a class="pager-prev" href="index.html">Previous: Blub &amp; Fuel</a>
+      <a class="pager-next" href="part1/01-blub-paradox.html">Next: The Blub Paradox</a>
+    </footer>
+  </main>
+</body>
+</html>

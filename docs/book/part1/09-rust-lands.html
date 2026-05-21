@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rust: a different goal, the same place - Blub &amp; Fuel</title>
+  <link rel="stylesheet" href="../book.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="book-title" href="../index.html">Blub &amp; Fuel</a>
+    <nav><ol><li><a href="../index.html">Blub &amp; Fuel</a></li><li><a href="../setup.html">Setup</a></li><li><a href="01-blub-paradox.html">The Blub Paradox</a></li><li><a href="02-normal-csharp-tour.html">Tour: the normal C# fuel engine</a></li><li><a href="03-seven-footguns.html">Seven footguns</a></li><li><a href="04-idiomatic-csharp.html">Idiomatic C#: same language, modern features on</a></li><li><a href="05-fsharp-native.html">F#: leaving C# behind</a></li><li><a href="06-fsharp-interop.html">F# interop: where the domain meets C#</a></li><li><a href="07-haskell-primer.html">A Haskell primer for C# developers</a></li><li><a href="08-haskell-safety.html">Haskell: making the bug unrepresentable</a></li><li><a href="09-rust-lands.html" aria-current="page" class="active">Rust: a different goal, the same place</a></li><li><a href="10-the-punch.html">The punch: what each rung made impossible</a></li><li><a href="../part1b/11-boundary-returns.html">The boundary returns</a></li><li><a href="../part1b/12-boundary-side-by-side.html">Four engines at the boundary</a></li><li><a href="../part1b/13-final-takeaway.html">The final takeaway</a></li><li><a href="../part2/r1-decision.html">Modelling the row decision</a></li><li><a href="../part2/r2-validation.html">Validation and warnings</a></li><li><a href="../part2/r3-recovery.html">Duplicate / recovery policy</a></li><li><a href="../part2/r4-boundary.html">The boundary</a></li><li><a href="../part2/r5-exhaustiveness.html">Exhaustiveness</a></li><li><a href="../part2/r6-mutability.html">Mutability and identity</a></li><li><a href="../part2/r7-null.html">Null and absence</a></li><li><a href="../references.html">references</a></li></ol></nav>
+  </aside>
+  <main>
+    <header class="page-header">
+      <p class="kicker">Static reader</p>
+      <h1>Rust: a different goal, the same place</h1>
+      <p class="source-link">Generated from <a href="../../../book/part1/09-rust-lands.qmd">part1/09-rust-lands.qmd</a>.</p>
+    </header>
+    <article>
+      <h2 id="a-language-built-for-a-different-problem">A language built for a different problem</h2>
+<p>Rust was not built to model fuel uploads. Rust was built so that Mozilla could write a browser engine without segfaults, without data races, and without a garbage collector. Everything that makes Rust <em>Rust</em> — ownership, borrowing, lifetimes, the borrow checker — is in the language because somebody wanted to move bytes around in memory without losing track of who owned them.</p>
+<p>That goal has nothing to do with the fuel pipeline.</p>
+<p>And yet when you read the Rust implementation of this engine, it looks almost exactly like the Haskell one. Same algebraic enums. Same exhaustive <code>match</code>. Same &quot;no nulls, ever.&quot; Same <code>Result&lt;T, E&gt;</code> where C# would have thrown. Rust got there from a different direction, and on this domain it arrives at the same destination.</p>
+<p>The reason is that the type machinery Rust needed for ownership — sum types with payloads, pattern matching the compiler can prove is total, no implicit nullability — happens to be <strong>exactly</strong> the type machinery you want for modelling domain decisions. The borrow checker is a different curriculum from Haskell&#x27;s purity discipline, but the algebraic-types parts are nearly the same lecture.</p>
+<h2 id="what-is-rust-most-like-on-this-domain">What is Rust most like, on this domain?</h2>
+<p>Honest answer: Haskell.</p>
+<p>Not F#, not C# — Haskell. Strip away the curly braces and the semicolons, replace <code>enum</code> with <code>data</code>, replace <code>match</code> with <code>case</code>, and the <code>domain/decision.rs</code> file would compile as Haskell with minor edits. The same algebraic shape. The same exhaustiveness discipline. The same doctrine that &quot;absent&quot; is a constructor, not a null.</p>
+<p>What Rust <em>adds</em> on top is ownership: every value has exactly one owner, references are tracked, and the compiler refuses to compile a program where a reference outlives the thing it points at. For the fuel engine, that machinery barely shows up. There is no concurrency. There is no shared mutable state. Every function takes references in and returns owned data out. Lifetimes are elided everywhere. You could read the whole codebase and not notice that Rust has a borrow checker.</p>
+<p>So on <strong>this</strong> domain, Rust is Haskell with curly braces and a performance budget. The pain Rust is famous for — fighting the borrow checker, threading lifetimes through return types, learning async — is off-stage. The payoff Rust is famous for — predictable performance, no GC pauses, fearless concurrency — is also off-stage. What&#x27;s on stage is the algebraic-types core, and that core is the same one you saw in Haskell.</p>
+<h2 id="the-same-shape-four-ways">The same shape, four ways</h2>
+<p>Here is the <code>RowDecision</code> type in all four ladder languages.</p>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart LR
+  subgraph CS[&quot;C# (idiomatic)&quot;]
+    CS1[&quot;abstract record RowDecision&lt;br/&gt;sealed nested records&lt;br/&gt;switch expressions&quot;]
+  end
+  subgraph FS[&quot;F#&quot;]
+    FS1[&quot;type RowDecision =&lt;br/&gt;vert-bar Accepted of ...&lt;br/&gt;vert-bar Rejected of ...&quot;]
+  end
+  subgraph HS[&quot;Haskell&quot;]
+    HS1[&quot;data RowDecision&lt;br/&gt;= Accepted FuelTransaction&lt;br/&gt;vert-bar Rejected RejectedRow&lt;br/&gt;vert-bar ...&quot;]
+  end
+  subgraph RS[&quot;Rust&quot;]
+    RS1[&quot;enum RowDecision {&lt;br/&gt;Accepted(FuelTransaction),&lt;br/&gt;Rejected(RejectedRow),&lt;br/&gt;...&lt;br/&gt;}&quot;]
+  end
+  CS1 --&gt; Same
+  FS1 --&gt; Same
+  HS1 --&gt; Same
+  RS1 --&gt; Same{{Same idea&lt;br/&gt;Exhaustiveness enforced}}</code></pre></figure>
+<p>Four spellings of &quot;a value that is exactly one of N alternatives, each carrying its own payload, and the compiler can prove you handled every alternative.&quot; Pick your favourite syntax. The semantics are the same.</p>
+<p>Here is the Rust version, straight from <code>domain/decision.rs</code>:</p>
+<pre><code class="language-rust">#[derive(Debug, Clone, PartialEq)]
+pub enum RowDecision {
+    Accepted(FuelTransaction),
+    Warning {
+        transaction: FuelTransaction,
+        warnings: Vec&lt;Warning&gt;,
+    },
+    Quarantined {
+        transaction: FuelTransaction,
+        reasons: QuarantineReasons,
+        warnings: Vec&lt;Warning&gt;,
+    },
+    SkippedDuplicate(SkippedDuplicate),
+    Rejected(RejectedRow),
+    Fatal(FatalError),
+}</code></pre>
+<p>Two things to notice. First, Rust mixes <em>tuple variants</em> (<code>Accepted(FuelTransaction)</code>) with <em>struct variants</em> (<code>Warning { transaction, warnings }</code>). Use positional when one payload is obvious; use named fields when you have three of them and need the names to read the diff six months from now. Haskell and F# are positional-only by default; idiomatic C# is verbose-only by default. Rust gives you both in one type.</p>
+<p>Second, <code>warnings</code> is <code>Vec&lt;Warning&gt;</code> — a plain growable list. There is no <code>NonEmpty</code> in Rust&#x27;s standard library. The <code>Warning</code> variant can legally be constructed with an empty warnings vector. That&#x27;s a real footgun and we&#x27;ll come back to it.</p>
+<p>But <code>reasons: QuarantineReasons</code> is <em>not</em> a plain <code>Vec</code>. Look at <code>domain/validation.rs</code>:</p>
+<pre><code class="language-rust">#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuarantineReasons(Vec&lt;QuarantineReason&gt;);
+
+impl QuarantineReasons {
+    pub fn new(reasons: Vec&lt;QuarantineReason&gt;) -&gt; Option&lt;Self&gt; {
+        if reasons.is_empty() {
+            None
+        } else {
+            Some(Self(reasons))
+        }
+    }
+
+    pub fn as_slice(&amp;self) -&gt; &amp;[QuarantineReason] {
+        &amp;self.0
+    }
+}</code></pre>
+<p>A newtype wrapper around <code>Vec&lt;QuarantineReason&gt;</code> with a <em>fallible</em> constructor. To build one you go through <code>QuarantineReasons::new(v)</code>, which hands you back an <code>Option&lt;QuarantineReasons&gt;</code> — <code>None</code> if the vector was empty. The inner field is private; the only way out is <code>.as_slice()</code>, which gives you a read-only view. This is Rust hand-rolling Haskell&#x27;s <code>NonEmpty</code> for one specific type. It works, but you only got it where you remembered to ask for it. The <code>Warning</code> and <code>Rejected</code> variants did not.</p>
+<h2 id="the-same-exhaustive-match-in-rust-syntax">The same exhaustive match, in Rust syntax</h2>
+<p>This is <code>engine/duplicate_policy.rs</code>. It is the recovery matrix — the heart of the duplicate logic, the place where normal C# lost a quarter of transactions to a missing branch.</p>
+<pre><code class="language-rust">pub(crate) fn duplicate_gate(
+    row: &amp;ParsedFuelRow,
+    duplicate_check: &amp;DuplicateCheckResult,
+    mode: UploadMode,
+) -&gt; DuplicateGate {
+    match (mode, duplicate_check) {
+        (_, DuplicateCheckResult::Unique) =&gt; DuplicateGate::Continue,
+        (_, DuplicateCheckResult::Fatal(error)) =&gt; DuplicateGate::Fatal(error.clone()),
+        (UploadMode::Normal, DuplicateCheckResult::Duplicate(state)) =&gt; {
+            DuplicateGate::Skip(skipped_duplicate(row, state, mode))
+        }
+        (
+            UploadMode::Retry,
+            DuplicateCheckResult::Duplicate(DuplicateState::PreviousAttempt {
+                retry: RetryEligibility::ExplicitlyRetryable, ..
+            }),
+        ) =&gt; DuplicateGate::Continue,
+        (UploadMode::Retry, DuplicateCheckResult::Duplicate(state)) =&gt; {
+            DuplicateGate::Skip(skipped_duplicate(row, state, mode))
+        }
+        (
+            UploadMode::ConservativeRecovery,
+            DuplicateCheckResult::Duplicate(DuplicateState::PreviousAttempt {
+                finalization: FinalizationState::FailedBeforeCanonicalFinalization, ..
+            }),
+        ) =&gt; DuplicateGate::Continue,
+        (UploadMode::ConservativeRecovery, DuplicateCheckResult::Duplicate(state)) =&gt; {
+            DuplicateGate::Skip(skipped_duplicate(row, state, mode))
+        }
+        (
+            UploadMode::AggressiveRecovery,
+            DuplicateCheckResult::Duplicate(DuplicateState::PreviousAttempt {
+                finalization: FinalizationState::FailedBeforeCanonicalFinalization, ..
+            }),
+        ) =&gt; DuplicateGate::Continue,
+        (
+            UploadMode::AggressiveRecovery,
+            DuplicateCheckResult::Duplicate(DuplicateState::PreviousAttempt {
+                finalization: FinalizationState::FailedAfterCanonicalFinalization,
+                canonical_transaction: CanonicalTransactionKey::Missing, ..
+            }),
+        ) =&gt; DuplicateGate::Continue,
+        (UploadMode::AggressiveRecovery, DuplicateCheckResult::Duplicate(state)) =&gt; {
+            DuplicateGate::Skip(skipped_duplicate(row, state, mode))
+        }
+    }
+}</code></pre>
+<p>Compare that to the F# version in <a href="05-fsharp-native.html">chapter 5</a> and the Haskell version in <a href="07-haskell-primer.html">chapter 7</a>. The shape is identical: pattern-match a tuple of <code>(mode, state)</code>, peel into the duplicate&#x27;s inner enum, handle each arm. Same machine, different syntax.</p>
+<p>The thing the compiler checks is the same. <code>UploadMode</code> has four variants. <code>DuplicateCheckResult</code> has three, one of which carries a <code>DuplicateState</code> with two of its own. The cross-product is finite, and the Rust compiler will refuse to build this function until every cell in that cross-product is covered — directly, or via a <code>_</code> wildcard, or via a guard. The footgun normal C# shipped (the missing aggressive-recovery branch) cannot ship in Rust. Delete the <code>FailedAfterCanonicalFinalization</code> arm and <code>cargo build</code> fails with the exact case it&#x27;s missing.</p>
+<h2 id="is-it-safe-are-bugs-obvious">Is it safe? Are bugs obvious?</h2>
+<p>Rust catches more at compile time than idiomatic C# does. It catches a comparable amount to F#. It catches fewer things than Haskell, in two specific places: no <code>NonEmpty</code> in the standard library, and no enforced purity (an unmarked function can do I/O).</p>
+<p>Within safe Rust — and the fuel engine is 100% safe Rust, zero <code>unsafe</code> blocks — you do not get null pointer dereferences, use- after-free, double-free, buffer overruns, or data races. The compiler proves their absence. For a domain library that means junior-friendly: there is no &quot;did this variable maybe get reassigned&quot; anxiety, because every binding is immutable unless spelled <code>let mut</code>. There is no &quot;did this method maybe return null&quot; anxiety, because nothing returns null. The escape hatch is <code>Option&lt;T&gt;</code> — itself an enum — and the compiler refuses to let you look inside it without handling <code>None</code>.</p>
+<p>The compiler errors are famously verbose. They are also famously precise. When you delete a <code>match</code> arm, the error names the exact missing variant, not a vague &quot;not all paths return a value.&quot; When you forget to handle a <code>Result</code>, the warning says which call site returned the unused <code>Result</code>. Compared to a C# stack trace, a Rust build failure is closer to a code review comment than to a runtime mystery.</p>
+<h2 id="footguns">Footguns</h2>
+<p>Be honest about them. None of these are fatal on this codebase, but they are the things that will bite a team in their first six months.</p>
+<p><strong><code>f64</code> for money and quantity.</strong> The fuel engine uses <code>f64</code> for <code>quantity_liters</code>, <code>total_cost</code>, and <code>unit_cost</code>. <code>f64</code> is IEEE-754 double-precision floating point. It is not a decimal type. Sum a million rows of <code>0.1</code> and you do not get <code>100000.0</code> — you get something close. The C# implementation uses <code>decimal</code> for the same fields; the Haskell implementation uses <code>Rational</code>. Rust has <code>rust_decimal</code> as a crate, but the standard library has no decimal type, so the path of least resistance is <code>f64</code>, and a junior will take it. The <a href="../../../docs/v3-results.md">V3 scoring report</a> calls this out directly: &quot;public constructors can build empty warning or rejection vectors; <code>f64</code> can still carry rounding-sensitive values.&quot;</p>
+<p><strong>Empty <code>Vec</code> where <code>NonEmpty</code> would be better.</strong> <code>Vec&lt;Warning&gt;</code> and <code>Vec&lt;ValidationError&gt;</code> are plain growable vectors. The <code>Warning</code> variant of <code>RowDecision</code> can be constructed with an empty warnings vector. The <code>Rejected</code> variant carries a <code>RejectionReason::ValidationFailed(Vec&lt;ValidationError&gt;)</code> that could legally be empty too. Haskell&#x27;s <code>NonEmpty</code> makes this impossible at the type level. Rust&#x27;s standard library does not ship <code>NonEmpty</code>, so you either roll your own (as <code>QuarantineReasons</code> did) or accept the runtime invariant.</p>
+<p><strong><code>derive(Debug)</code> leaking into DTOs.</strong> Look closely at the boundary layer. Rust&#x27;s <code>Debug</code> trait gives you a free <code>format!(&quot;{:?}&quot;, x)</code> that prints a developer-readable representation. It is <em>not</em> a stable API. The V3 boundary implementation uses <code>Debug</code>-formatted strings for several DTO fields. The V3 report calls this out: &quot;debug-formatted DTO strings, <code>Vec</code> payloads where non-empty wrappers would be stronger.&quot; If you ship <code>format!(&quot;{:?}&quot;, reason)</code> as your public status string and then someone reorders the enum&#x27;s fields, the DTO output changes. The compiler will not warn you. This is the Rust equivalent of C# returning <code>someEnum.ToString()</code> as an API.</p>
+<p><strong><code>.unwrap()</code> and <code>.expect()</code>.</strong> The escape hatches from <code>Option</code> and <code>Result</code>. They say &quot;I know this is <code>Some</code>/<code>Ok</code>, panic if I&#x27;m wrong.&quot; They are the equivalent of Haskell&#x27;s <code>fromJust</code>. The fuel engine uses them legitimately after manual validation, but they are exactly the tool a junior reaches for when they don&#x27;t know how to handle the case. <code>clippy::unwrap_used</code> and <code>clippy::expect_used</code> exist as lints; a serious team turns them on in CI.</p>
+<p><strong>Async, generics with trait bounds, and the borrow checker</strong> — all real, all painful, all <em>not</em> present in this engine. They are the next things you will meet. Budget for them when scope grows.</p>
+<h2 id="easy-to-extend">Easy to extend</h2>
+<p>Add a 7th <code>RowDecision</code> case. Maybe <code>ManualReview</code> — &quot;this row needs a human.&quot; Add the variant to the enum:</p>
+<pre><code class="language-rust">pub enum RowDecision {
+    Accepted(FuelTransaction),
+    Warning { /* ... */ },
+    Quarantined { /* ... */ },
+    SkippedDuplicate(SkippedDuplicate),
+    Rejected(RejectedRow),
+    Fatal(FatalError),
+    ManualReview { transaction: FuelTransaction, reviewer: String },  // new
+}</code></pre>
+<p>Now run <code>cargo build</code>. Every <code>match</code> on <code>RowDecision</code> becomes a compile error. Every place that filtered for <code>Accepted</code> or counted warnings. Every place that projected to a DTO. Every place that mapped to a summary. The compiler hands you a list of files to visit, with line numbers.</p>
+<p>F# warns about incomplete patterns by default (an error only if you turn on warnings-as-errors). Haskell warns about incomplete patterns by default (an error only if you turn on <code>-Werror</code>). Rust <strong>errors</strong> with no flag. The build does not produce a binary.</p>
+<p>That is stricter than F#&#x27;s default and stricter than Haskell&#x27;s default. It is the same outcome (build refuses) that a serious F# or Haskell shop gets by turning on the warning-as-error flag — but in Rust the strict default is the only setting.</p>
+<p>The cost: when you genuinely want to ship an unfinished feature behind a feature flag, Rust will not let you. You have to add the arm, even if it&#x27;s a <code>todo!()</code>. Some teams find that pedantic. Others call it the point.</p>
+<h2 id="where-this-still-leaks">Where this still leaks</h2>
+<p>The Rust V3 boundary added typed CSV import, repository traits, an audit projection, and an operational report. The classifier itself stayed clean — same exhaustive match, same algebraic enums.</p>
+<p>But the V3 repository adapter rehydrates DTOs through string status. The <a href="../../../docs/v3-results.md">V3 scoring report</a> is explicit: &quot;the repository adapter converts typed repository results into string DTO fields, then parses them back into domain inputs. That mirrors C#&#x27;s shortcut and weakens the boundary.&quot;</p>
+<p>The same shape we&#x27;ll see in C# and F# shows up in Rust too. The domain is type-safe; the moment you cross the wire — CSV in, JSON-ish DTO out, repository round-trip — strings creep back. Rust catches more of those re-entry points than C# does, because the boundary parser returns <code>Result&lt;T, FuelImportError&gt;</code> instead of throwing. But it does not catch the choice to round-trip through a string in the first place.</p>
+<p>That tension — clean core, edges that bring strings back — is the subject of Part Ib. Read on: <a href="../part1b/11-boundary-returns.html">Chapter 11: The boundary returns</a>.</p>
+<p>Before that, Chapter 10 closes the ladder. Five rungs, seven footguns, one table.</p>
+    </article>
+    <footer class="pager">
+      <a class="pager-prev" href="08-haskell-safety.html">Previous: Haskell: making the bug unrepresentable</a>
+      <a class="pager-next" href="10-the-punch.html">Next: The punch: what each rung made impossible</a>
+    </footer>
+  </main>
+</body>
+</html>

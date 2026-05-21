@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The punch: what each rung made impossible - Blub &amp; Fuel</title>
+  <link rel="stylesheet" href="../book.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="book-title" href="../index.html">Blub &amp; Fuel</a>
+    <nav><ol><li><a href="../index.html">Blub &amp; Fuel</a></li><li><a href="../setup.html">Setup</a></li><li><a href="01-blub-paradox.html">The Blub Paradox</a></li><li><a href="02-normal-csharp-tour.html">Tour: the normal C# fuel engine</a></li><li><a href="03-seven-footguns.html">Seven footguns</a></li><li><a href="04-idiomatic-csharp.html">Idiomatic C#: same language, modern features on</a></li><li><a href="05-fsharp-native.html">F#: leaving C# behind</a></li><li><a href="06-fsharp-interop.html">F# interop: where the domain meets C#</a></li><li><a href="07-haskell-primer.html">A Haskell primer for C# developers</a></li><li><a href="08-haskell-safety.html">Haskell: making the bug unrepresentable</a></li><li><a href="09-rust-lands.html">Rust: a different goal, the same place</a></li><li><a href="10-the-punch.html" aria-current="page" class="active">The punch: what each rung made impossible</a></li><li><a href="../part1b/11-boundary-returns.html">The boundary returns</a></li><li><a href="../part1b/12-boundary-side-by-side.html">Four engines at the boundary</a></li><li><a href="../part1b/13-final-takeaway.html">The final takeaway</a></li><li><a href="../part2/r1-decision.html">Modelling the row decision</a></li><li><a href="../part2/r2-validation.html">Validation and warnings</a></li><li><a href="../part2/r3-recovery.html">Duplicate / recovery policy</a></li><li><a href="../part2/r4-boundary.html">The boundary</a></li><li><a href="../part2/r5-exhaustiveness.html">Exhaustiveness</a></li><li><a href="../part2/r6-mutability.html">Mutability and identity</a></li><li><a href="../part2/r7-null.html">Null and absence</a></li><li><a href="../references.html">references</a></li></ol></nav>
+  </aside>
+  <main>
+    <header class="page-header">
+      <p class="kicker">Static reader</p>
+      <h1>The punch: what each rung made impossible</h1>
+      <p class="source-link">Generated from <a href="../../../book/part1/10-the-punch.qmd">part1/10-the-punch.qmd</a>.</p>
+    </header>
+    <article>
+      <h2 id="restating-the-climb">Restating the climb</h2>
+<p>The blub paradox said you cannot see what your language is missing while you are inside it. The point of building the same fuel engine five times was to <em>show</em> the missing pieces — to put the junior C# version next to the idiomatic, F#, Haskell, and Rust versions and ask: for each footgun, what would the compiler have done?</p>
+<p>You have now seen all five rungs. Each one made a class of error <strong>structurally impossible</strong> that the rung below treated as a footgun. Not less likely. Impossible. The compiler refuses to produce a binary in which that bug exists.</p>
+<p>This is the synthesis chapter. It does not introduce new code. It puts the climb in one table, one diagram, and one answer to each of the four questions we promised to ask at every rung.</p>
+<h2 id="the-big-table">The big table</h2>
+<p>Seven footguns, five languages. <em>Open</em> means the language lets the bug compile and ship. <em>Convention</em> means the language allows it but the idiomatic style does not. <em>Closed</em> means the compiler catches it. <em>Unrepresentable</em> means the bug cannot be expressed in the type system at all.</p>
+<div class="table-wrap"><table><thead><tr><th>#</th><th>Footgun</th><th>Normal C#</th><th>Idiomatic C#</th><th>F#</th><th>Haskell</th><th>Rust</th></tr></thead><tbody><tr><td>1</td><td>NRE in logger (null deref)</td><td>Open</td><td>Closed (NRT)</td><td>Unrepresentable</td><td>Unrepresentable</td><td>Unrepresentable</td></tr><tr><td>2</td><td>Case-sensitive mode string</td><td>Open</td><td>Closed (enum)</td><td>Unrepresentable (DU)</td><td>Unrepresentable (ADT)</td><td>Unrepresentable (enum)</td></tr><tr><td>3</td><td>Missing recovery branch</td><td>Open</td><td>Convention (default throws at runtime)</td><td>Closed (warning, error in CI)</td><td>Closed (warning, error with <code>-Werror</code>)</td><td>Unrepresentable (compile error)</td></tr><tr><td>4</td><td>Mutable response list</td><td>Open</td><td>Convention (<code>IReadOnlyList</code>)</td><td>Closed (immutable by default)</td><td>Unrepresentable (purity + immutable data)</td><td>Closed (immutable by default)</td></tr><tr><td>5</td><td>Status typos as strings</td><td>Open</td><td>Closed (sealed records)</td><td>Unrepresentable (DU)</td><td>Unrepresentable (ADT)</td><td>Unrepresentable (enum)</td></tr><tr><td>6</td><td>Validator throws on first failure</td><td>Open</td><td>Convention (returns list)</td><td>Convention (returns list)</td><td>Convention (returns <code>NonEmpty</code>)</td><td>Convention (returns <code>Vec</code>)</td></tr><tr><td>7</td><td><code>switch</code> with no default</td><td>Open</td><td>Convention (compiler doesn&#x27;t enforce)</td><td>Closed (warning, error in CI)</td><td>Closed (warning, error with <code>-Werror</code>)</td><td>Unrepresentable (compile error)</td></tr></tbody></table></div>
+<p>Three things to notice.</p>
+<p>First, the gap between <em>normal C#</em> and <em>idiomatic C#</em> is enormous. Six of seven move from open to closed without changing language. The rung you can take fastest, with the least training cost, is the one inside your existing toolchain. If you read no further than <a href="04-idiomatic-csharp.html">chapter 4</a>, most of the work is already done.</p>
+<p>Second, the difference between <em>idiomatic C#</em> and <em>F#/Haskell/Rust</em> is not &quot;more bugs caught&quot; — most of the bugs are already caught. The difference is <strong>how</strong>. Idiomatic C# closes six footguns through a combination of compiler features and convention: turn on NRT, use sealed records, prefer <code>IReadOnlyList&lt;T&gt;</code>, write switch expressions, remember the default arm. F#/Haskell/Rust close the same six <strong>without remembering</strong>. The cases are unrepresentable. There is no default arm to forget, because there is no string status to forget about.</p>
+<p>Third, footgun 6 (the throwing validator) is <em>convention</em> in all four upper rungs. No mainstream type system forces you to write a non-throwing validator. The cultural default is &quot;return a list of errors,&quot; and the linter / clippy / FS warning will lean on you to follow it — but if you write <code>panic!(&quot;bad row&quot;)</code> in Rust or <code>failwith</code> in F#, the compiler will let you.</p>
+<h2 id="the-ladder-visualised">The ladder, visualised</h2>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart TB
+  Normal[&quot;Normal C#&lt;br/&gt;strings, mutable POCOs, exceptions&quot;]
+  Idiomatic[&quot;Idiomatic C#&lt;br/&gt;NRT, sealed records, switch expressions&quot;]
+  FS[&quot;F#&lt;br/&gt;DUs, immutable by default, pattern matching&quot;]
+  HS[&quot;Haskell&lt;br/&gt;ADTs, NonEmpty, purity, IO in the signature&quot;]
+  RS[&quot;Rust&lt;br/&gt;enums, exhaustive match, ownership, no GC&quot;]
+
+  Normal --&gt;|&quot;+ NRT, sealed records, switch expr&lt;br/&gt;&lt;b&gt;closes footguns 1, 2, 4, 5, 7 (by convention)&lt;/b&gt;&quot;| Idiomatic
+  Idiomatic --&gt;|&quot;+ DUs, default immutability, enforced exhaustiveness&lt;br/&gt;&lt;b&gt;closes footgun 3 properly; 4, 7 unrepresentable&lt;/b&gt;&quot;| FS
+  FS --&gt;|&quot;+ NonEmpty, purity in the signature&lt;br/&gt;&lt;b&gt;closes footgun 6 at the type level&lt;/b&gt;&quot;| HS
+  Idiomatic -.-&gt;|&quot;parallel branch:&lt;br/&gt;same algebraic types,&lt;br/&gt;different goal (memory safety)&quot;| RS
+
+  style Normal fill:#fdd
+  style Idiomatic fill:#fed
+  style FS fill:#ffd
+  style HS fill:#dfd
+  style RS fill:#def</code></pre></figure>
+<p>Rust is shown as a parallel branch off the algebraic-types step rather than strictly above F# on the ladder. The reason: Rust&#x27;s type discipline is comparable to F#/Haskell, but Rust got there chasing memory safety, not domain modelling. On this domain that distinction does not matter — Rust closes the same footguns. On a domain with concurrency or zero-copy parsing, Rust would pull ahead. On a domain with a <code>NonEmpty</code> invariant, Haskell would pull ahead. There is no single ordering; there is a set of tradeoffs.</p>
+<h2 id="the-four-questions-answered">The four questions, answered</h2>
+<p>We promised at every rung to ask the same four questions. Here are all the answers in one place.</p>
+<h3 id="what-did-each-rung-protect-against">What did each rung protect against?</h3>
+<div class="table-wrap"><table><thead><tr><th>Rung</th><th>Closed</th></tr></thead><tbody><tr><td>Idiomatic C#</td><td>Nulls (NRT), string typos (sealed records), unknown enum values, mutable response surface</td></tr><tr><td>F#</td><td>Forgotten DU cases (warning, error in CI), default immutability, non-empty wrappers possible</td></tr><tr><td>Haskell</td><td>Non-empty <em>enforced</em> at the type level (<code>NonEmpty</code>); side effects visible in the signature (<code>IO</code>)</td></tr><tr><td>Rust</td><td>Exhaustive match as a hard compile error (no flag), ownership rules, memory safety, no GC</td></tr></tbody></table></div>
+<h3 id="what-can-still-go-wrong">What can still go wrong?</h3>
+<div class="table-wrap"><table><thead><tr><th>Rung</th><th>Still possible</th></tr></thead><tbody><tr><td>Idiomatic C#</td><td>A <code>switch</code> with a default arm that throws at runtime when a new case ships; runtime-only quarantine-reasons check; nullable third-party types; warnings ignored</td></tr><tr><td>F#</td><td><code>[&lt;CLIMutable&gt;]</code> for C# interop weakens the type model; DTO strings at the boundary; warnings can be disabled</td></tr><tr><td>Haskell</td><td>DTO strings still leak in (<code>show</code>-formatted); cross-field combinations inside a record can still be inconsistent; pure model, impure adapter</td></tr><tr><td>Rust</td><td><code>f64</code> for money; empty <code>Vec</code> where <code>NonEmpty</code> would be tighter; <code>Debug</code>-formatted DTO strings; <code>.unwrap()</code> panics in poorly-reviewed code</td></tr></tbody></table></div>
+<p>Notice the pattern: as you climb, the &quot;still possible&quot; list does not get shorter so much as it <strong>moves outward</strong>. The core is clean. The bugs migrate to the boundary, where strings come in and go out. That is the entire subject of Part Ib.</p>
+<h3 id="easier-or-harder-to-read">Easier or harder to read?</h3>
+<div class="table-wrap"><table><thead><tr><th>Rung</th><th>Reading experience</th></tr></thead><tbody><tr><td>Idiomatic C#</td><td>Verbose but immediately readable to any C# developer; switch expressions take a week to internalise</td></tr><tr><td>F#</td><td>Compact, terse; reads like pseudocode for the domain; takes a week of &quot;what does that operator mean&quot; before it clicks</td></tr><tr><td>Haskell</td><td>Highest signal-to-noise ratio of any version; <code>data RowDecision = ...</code> is the domain model verbatim; takes a month for <code>do</code>-notation, typeclasses, and <code>Monad</code> to feel natural</td></tr><tr><td>Rust</td><td>Verbose like idiomatic C#, but the verbosity is in the right places — named field variants, explicit <code>.clone()</code>, explicit lifetimes when they matter; reads like ML once you get past the punctuation</td></tr></tbody></table></div>
+<h3 id="easy-to-extend">Easy to extend?</h3>
+<p>Add a 7th <code>RowDecision</code> case — <code>ManualReview</code>. What does the compiler do?</p>
+<div class="table-wrap"><table><thead><tr><th>Rung</th><th>Outcome</th></tr></thead><tbody><tr><td>Normal C#</td><td>Silent runtime corruption. <code>switch (d.Status)</code> has no default arm and the new status is never counted. The build is green. Bugs found at month-end reconciliation.</td></tr><tr><td>Idiomatic C#</td><td>Runtime throw. The switch expression&#x27;s discard arm hits <code>_ =&gt; throw new InvalidOperationException(...)</code>. Loud — you find out on the same deploy — but still runtime, still after CI passed.</td></tr><tr><td>F#</td><td>Compiler warning <code>FS0025</code> (incomplete pattern match). With <code>&lt;TreatWarningsAsErrors&gt;true&gt;</code> (idiomatic in F# production projects) the build refuses.</td></tr><tr><td>Haskell</td><td>Compiler warning <code>-Wincomplete-patterns</code>. With <code>-Werror</code> (idiomatic in Haskell production projects) the build refuses.</td></tr><tr><td>Rust</td><td>Compile error <code>E0004</code>. No flag to set. The build cannot produce a binary.</td></tr></tbody></table></div>
+<p>The C# crowd will note that the gap between <em>warning</em> and <em>error</em> is configuration. True. The gap between <em>silent</em> and <em>warning</em> is not configuration — it is the type system.</p>
+<h2 id="there-is-no-winner">There is no winner</h2>
+<p>This is not a polemic. Read the <a href="../../../docs/v2-results.md">V2 scoring report</a> and you will see that all four serious implementations score within three points of each other (87–90 out of 100). The differences are real but not huge, and they are differences <em>of kind</em>, not of quantity:</p>
+<ul><li><strong>Idiomatic C#</strong> closes six of seven footguns cheaply for a .NET shop. It is the most practical production fit in this organisation. It is what we would actually ship.</li></ul>
+<ul><li><strong>F#</strong> is the best compromise inside .NET. Discriminated unions, immutable by default, exhaustive pattern matching — all without leaving the CLR. Hires are harder, debugging is the same Visual Studio, deployment is identical to C#. The <a href="../../../docs/v3-results.md">V3 scoring</a> put F# at the top once the boundary work was added.</li></ul>
+<ul><li><strong>Haskell</strong> is the reference oracle. The cleanest algebraic model, the only property tests, the strongest <code>NonEmpty</code> discipline. We would not ship it in a .NET shop, but we would read it before designing the C# version. It is the answer to &quot;what does the type system look like with all the safety nets turned on?&quot;</li></ul>
+<ul><li><strong>Rust</strong> gets the same algebraic safety with curly braces and a performance budget. On this domain, that performance budget is irrelevant. On a different domain (a parser, a service that fans out to a million concurrent connections, an embedded agent), Rust would pull ahead.</li></ul>
+<p>The blub paradox warned you that you cannot see what your language is missing from inside it. You have now seen it. You have a vocabulary — <em>exhaustive match</em>, <em>non-null by default</em>, <em>discriminated unions</em>, <em>non-empty at the type level</em>, <em>immutable by default</em> — and you have a calibrated eye. The next time someone says &quot;F# would have caught that,&quot; you know what they mean. The next time someone says &quot;the compiler error told me exactly which file to fix,&quot; you know which compiler.</p>
+<p>That is the whole purpose of climbing the ladder. Not to rank the languages. To <strong>see</strong> the categories.</p>
+<h2 id="teaser-the-cores-are-clean-the-edges-are-not">Teaser: the cores are clean, the edges are not</h2>
+<p>Every version above has a clean core. The classifier is pure. The decision is a sum type. The summary is derived. The recovery matrix is exhaustively matched.</p>
+<p>And yet every version above still has bugs.</p>
+<p>The bugs do not live in the core. They live at the edges. CSV imports parse dates with three different libraries and accept three slightly different sets of strings. Repository adapters look up a transaction, get a typed result back, and then <strong>stringify it</strong> before mapping it back into the domain — the same string-typed pattern the junior version shipped with, only moved to a different file. Audit logs project domain decisions into freeform <code>show</code>-style text that breaks when an enum is reordered. Operational reports double-count rows when the fatal batch logic forgets to suppress the upload list.</p>
+<p>Every real app has those edges. The next part of this book is about them. The clean core was the easy half. The boundary is where the bugs come back.</p>
+<p><a href="../part1b/11-boundary-returns.html">Read on: Chapter 11 — The boundary returns</a>.</p>
+    </article>
+    <footer class="pager">
+      <a class="pager-prev" href="09-rust-lands.html">Previous: Rust: a different goal, the same place</a>
+      <a class="pager-next" href="../part1b/11-boundary-returns.html">Next: The boundary returns</a>
+    </footer>
+  </main>
+</body>
+</html>

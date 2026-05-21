@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Idiomatic C#: same language, modern features on - Blub &amp; Fuel</title>
+  <link rel="stylesheet" href="../book.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="book-title" href="../index.html">Blub &amp; Fuel</a>
+    <nav><ol><li><a href="../index.html">Blub &amp; Fuel</a></li><li><a href="../setup.html">Setup</a></li><li><a href="01-blub-paradox.html">The Blub Paradox</a></li><li><a href="02-normal-csharp-tour.html">Tour: the normal C# fuel engine</a></li><li><a href="03-seven-footguns.html">Seven footguns</a></li><li><a href="04-idiomatic-csharp.html" aria-current="page" class="active">Idiomatic C#: same language, modern features on</a></li><li><a href="05-fsharp-native.html">F#: leaving C# behind</a></li><li><a href="06-fsharp-interop.html">F# interop: where the domain meets C#</a></li><li><a href="07-haskell-primer.html">A Haskell primer for C# developers</a></li><li><a href="08-haskell-safety.html">Haskell: making the bug unrepresentable</a></li><li><a href="09-rust-lands.html">Rust: a different goal, the same place</a></li><li><a href="10-the-punch.html">The punch: what each rung made impossible</a></li><li><a href="../part1b/11-boundary-returns.html">The boundary returns</a></li><li><a href="../part1b/12-boundary-side-by-side.html">Four engines at the boundary</a></li><li><a href="../part1b/13-final-takeaway.html">The final takeaway</a></li><li><a href="../part2/r1-decision.html">Modelling the row decision</a></li><li><a href="../part2/r2-validation.html">Validation and warnings</a></li><li><a href="../part2/r3-recovery.html">Duplicate / recovery policy</a></li><li><a href="../part2/r4-boundary.html">The boundary</a></li><li><a href="../part2/r5-exhaustiveness.html">Exhaustiveness</a></li><li><a href="../part2/r6-mutability.html">Mutability and identity</a></li><li><a href="../part2/r7-null.html">Null and absence</a></li><li><a href="../references.html">references</a></li></ol></nav>
+  </aside>
+  <main>
+    <header class="page-header">
+      <p class="kicker">Static reader</p>
+      <h1>Idiomatic C#: same language, modern features on</h1>
+      <p class="source-link">Generated from <a href="../../../book/part1/04-idiomatic-csharp.qmd">part1/04-idiomatic-csharp.qmd</a>.</p>
+    </header>
+    <article>
+      <h2 id="same-language-all-the-dials-turned-on">Same language. All the dials turned on.</h2>
+<p>You don&#x27;t have to leave C# to make six of the seven footguns from <a href="03-seven-footguns.html">chapter 03</a> disappear. You just have to <strong>turn on the features juniors usually skip</strong>.</p>
+<p>In one breath: <code>&lt;Nullable&gt;enable&lt;/Nullable&gt;</code>, sealed-record hierarchies as a poor-man&#x27;s discriminated union, <code>switch</code> <em>expressions</em> with type patterns, record structs as zero-cost typed primitives, <code>IReadOnlyList&lt;T&gt;</code> at every boundary, real enums instead of string constants, and a validator that <strong>accumulates errors into a list</strong> instead of throwing on the first one.</p>
+<p>No new language. No new build system. Same <code>dotnet test</code>. The compiler is about to get a lot more useful.</p>
+<h2 id="the-shape-of-the-type-model-before-and-after">The shape of the type model, before and after</h2>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart LR
+  subgraph Normal[&quot;normalcsharp — one flat class&quot;]
+    direction TB
+    N1[RowDecision : class]
+    N1 --&gt; NS[&quot;Status : string&lt;br/&gt;&#x27;Accepted&#x27; | &#x27;Rejected&#x27; | ...&quot;]
+    N1 --&gt; NT[&quot;Transaction? : FuelTransaction&quot;]
+    N1 --&gt; NV[&quot;Vehicle? : Vehicle&quot;]
+    N1 --&gt; NE[&quot;Errors : List&amp;lt;string&amp;gt;&quot;]
+    N1 --&gt; NW[&quot;Warnings : List&amp;lt;string&amp;gt;&quot;]
+    N1 --&gt; NQ[&quot;QuarantineReasons : List&amp;lt;string&amp;gt;&quot;]
+    N1 --&gt; NSR[&quot;SkipReason? : string&quot;]
+    N1 --&gt; NFM[&quot;FatalMessage? : string&quot;]
+  end
+
+  subgraph Idiomatic[&quot;csharp — sealed-record DU&quot;]
+    direction TB
+    I0[(abstract record RowDecision&lt;br/&gt;private ctor)]
+    I0 --&gt; I1[AcceptedTransaction&lt;br/&gt;Transaction]
+    I0 --&gt; I2[AcceptedTransactionWithWarnings&lt;br/&gt;Transaction, Warnings]
+    I0 --&gt; I3[QuarantinedRow&lt;br/&gt;RowNumber, Transaction,&lt;br/&gt;Reasons, Warnings]
+    I0 --&gt; I4[SkippedDuplicate&lt;br/&gt;RowNumber, Duplicate, Reason]
+    I0 --&gt; I5[RejectedRow&lt;br/&gt;RowNumber, Reason]
+    I0 --&gt; I6[FatalProcessingError&lt;br/&gt;RowNumber, Error]
+  end</code></pre></figure>
+<p>In the normal branch, <strong>every field exists on every decision</strong> and is nullable by convention. The compiler thinks an <code>Accepted</code> row and a <code>Fatal</code> row have the same shape; only the <code>Status</code> string discriminates them. Forgetting to null-check <code>Vehicle</code> on a <code>Rejected</code> row is what caused footgun #1.</p>
+<p>In the idiomatic branch, <code>RowDecision</code> is an <code>abstract record</code> with a <strong>private constructor</strong> and six nested <code>sealed record</code> cases. The private constructor is the load-bearing trick — it prevents anyone outside the file declaring a seventh subtype, which is the only thing that makes exhaustiveness checks meaningful at all.</p>
+<pre><code class="language-csharp">// csharp-fuel-engine/src/FuelUploadEngine/Domain/RowDecision.cs
+public abstract record RowDecision
+{
+    private RowDecision() { }
+
+    public sealed record AcceptedTransaction(FuelTransaction Transaction) : RowDecision;
+
+    public sealed record AcceptedTransactionWithWarnings(
+        FuelTransaction Transaction,
+        IReadOnlyList&lt;UploadWarning&gt; Warnings) : RowDecision;
+
+    public sealed record QuarantinedRow : RowDecision { /* invariant-checked ctor */ }
+
+    public sealed record SkippedDuplicate(
+        RowNumber RowNumber,
+        DuplicateState Duplicate,
+        DuplicateSkipCode Reason) : RowDecision;
+
+    public sealed record RejectedRow(RowNumber RowNumber, RejectionReason Reason) : RowDecision;
+
+    public sealed record FatalProcessingError(RowNumber RowNumber, FatalError Error) : RowDecision;
+}</code></pre>
+<p>A <code>RejectedRow</code> has no <code>Transaction</code> field. There is nothing to null. The illegal state is unrepresentable.</p>
+<h2 id="footgun-by-footgun">Footgun by footgun</h2>
+<p>For each of the seven, we&#x27;ll look at the normal version, the idiomatic version, and then say plainly: closed, or still open?</p>
+<h3 id="footgun-1-nre-in-the-logger">Footgun #1 — NRE in the logger</h3>
+<p>Normal C#:</p>
+<pre><code class="language-csharp">// normalcsharp/src/.../Services/FuelUploadService.cs:155
+Console.WriteLine(
+    &quot;row &quot; + d.RowNumber +
+    &quot; plate=&quot; + d.Vehicle.LicensePlate +    // null on Rejected rows
+    &quot; status=&quot; + d.Status);</code></pre>
+<p>Idiomatic C#:</p>
+<pre><code class="language-csharp">// csharp/src/.../Domain/RowDecision.cs
+public sealed record RejectedRow(RowNumber RowNumber, RejectionReason Reason) : RowDecision;</code></pre>
+<p>A <code>RejectedRow</code> literally has no <code>Transaction</code> and no <code>Vehicle</code> member. You cannot write <code>decision.Vehicle.LicensePlate</code> because there is no <code>Vehicle</code> property on a <code>RejectedRow</code> to dereference. The only way to talk about a vehicle is to first pattern-match on a case that has one:</p>
+<pre><code class="language-csharp">var plate = decision switch
+{
+    RowDecision.AcceptedTransaction a            =&gt; a.Transaction.Vehicle.Identifier.Value,
+    RowDecision.AcceptedTransactionWithWarnings a =&gt; a.Transaction.Vehicle.Identifier.Value,
+    RowDecision.QuarantinedRow q                  =&gt; q.Transaction.Vehicle.Identifier.Value,
+    _ =&gt; &quot;(no vehicle)&quot;
+};</code></pre>
+<p><strong>Closed.</strong> Nominal subtyping over a sealed hierarchy — the field exists where it&#x27;s meaningful and nowhere else.</p>
+<h3 id="footgun-2-case-sensitive-mode-string">Footgun #2 — case-sensitive mode string</h3>
+<p>Normal C#:</p>
+<pre><code class="language-csharp">// normalcsharp/src/.../Services/DuplicatePolicy.cs:21
+if (mode == UploadModes.Retry) { ... }   // ordinal compare; &quot;retry&quot; silently misses</code></pre>
+<p>Idiomatic C#:</p>
+<pre><code class="language-csharp">// csharp/src/.../Domain/Primitives.cs
+public enum UploadMode { Normal, Retry, ConservativeRecovery, AggressiveRecovery }
+
+// csharp/src/.../Application/FuelUploadMapper.cs
+private static UploadMode? ParseUploadMode(string? value, ...) =&gt; Normalize(value) switch
+{
+    &quot;normal&quot;               =&gt; UploadMode.Normal,
+    &quot;retry&quot;                =&gt; UploadMode.Retry,
+    &quot;conservativerecovery&quot; =&gt; UploadMode.ConservativeRecovery,
+    &quot;aggressiverecovery&quot;   =&gt; UploadMode.AggressiveRecovery,
+    _ =&gt; InvalidUploadMode(field, value, errors)
+};</code></pre>
+<p>The string only lives in <code>FuelUploadMapper</code>, where it&#x27;s lowercased, trimmed, and stripped of underscores <strong>once</strong>. Inside the engine, <code>mode</code> is one of four enum values. Case-sensitive equality on a string is gone from the engine entirely.</p>
+<p><strong>Closed.</strong> Enum + boundary normalisation.</p>
+<h3 id="footgun-3-the-missing-aggressive-recovery-branch">Footgun #3 — the missing aggressive-recovery branch</h3>
+<p>This is the killer. The normal branch had a four-block <code>if/else if</code> chain on <code>mode</code> and a forgotten arm:</p>
+<pre><code class="language-csharp">// normalcsharp/src/.../Services/DuplicatePolicy.cs
+if (mode == UploadModes.AggressiveRecovery)
+{
+    if (previousOutcome == PreviousOutcomes.FailedBeforeCanonicalFinalization)
+        return true;
+    // NOTE: forgot to also accept FailedAfterCanonicalFinalizationWithoutKey
+    skipReason = &quot;AggressiveRecoverySkipped&quot;;
+    return false;
+}</code></pre>
+<p>Idiomatic C#:</p>
+<pre><code class="language-csharp">// csharp/src/.../Engine/DuplicatePolicy.cs
+return mode switch
+{
+    UploadMode.Normal =&gt; new RowDecision.SkippedDuplicate(
+        row.RowNumber, duplicate, DuplicateSkipCode.DuplicateInNormalMode),
+
+    UploadMode.Retry when duplicate.PreviousOutcome is PreviousUploadOutcome.RetryableFailure =&gt; null,
+    UploadMode.Retry =&gt; new RowDecision.SkippedDuplicate(
+        row.RowNumber, duplicate, DuplicateSkipCode.PreviousAttemptNotRetryable),
+
+    UploadMode.ConservativeRecovery when duplicate.PreviousOutcome is PreviousUploadOutcome.FailedBeforeCanonicalFinalization =&gt; null,
+    UploadMode.ConservativeRecovery =&gt; new RowDecision.SkippedDuplicate(
+        row.RowNumber, duplicate, DuplicateSkipCode.PreviousAttemptAlreadyCanonicalized),
+
+    UploadMode.AggressiveRecovery when duplicate.PreviousOutcome is PreviousUploadOutcome.FailedBeforeCanonicalFinalization =&gt; null,
+    UploadMode.AggressiveRecovery
+        when duplicate.PreviousOutcome is PreviousUploadOutcome.FailedAfterCanonicalFinalization
+          &amp;&amp; duplicate.CanonicalTransactionKey is CanonicalTransactionKeyState.Missing =&gt; null,
+    UploadMode.AggressiveRecovery =&gt; new RowDecision.SkippedDuplicate(
+        row.RowNumber, duplicate, DuplicateSkipCode.PreviousAttemptAlreadyCanonicalized),
+
+    _ =&gt; throw new InvalidOperationException(&quot;Unhandled upload mode.&quot;)
+};</code></pre>
+<p>All four modes are visible in a single eight-line scan. The &quot;canonical-key missing&quot; carve-out is <em>right there</em> as its own arm with a <code>when</code> clause on the <code>CanonicalTransactionKeyState</code> sealed-record union. The compiler doesn&#x27;t strictly <em>force</em> coverage over the enum (see &quot;what can still go wrong&quot;), but the visual signal-to-noise of a switch expression makes a forgotten case stand out in code review the way the if-else maze did not.</p>
+<p><strong>Closed in practice, not by compiler proof.</strong> The default <code>_ =&gt; throw</code> is your runtime backstop.</p>
+<h3 id="footgun-4-publicly-mutable-list-string-on-the-response">Footgun #4 — publicly-mutable <code>List&lt;string&gt;</code> on the response</h3>
+<p>Normal C#:</p>
+<pre><code class="language-csharp">// normalcsharp/src/.../Models/RowDecision.cs:13
+public List&lt;string&gt; Errors = new List&lt;string&gt;();
+public List&lt;string&gt; Warnings = new List&lt;string&gt;();
+public List&lt;string&gt; QuarantineReasons = new List&lt;string&gt;();</code></pre>
+<p>A caller can <code>resp.Decisions[i].Errors.Add(...)</code> after <code>Process()</code> returns and rewrite the audit trail.</p>
+<p>Idiomatic C#:</p>
+<pre><code class="language-csharp">// csharp/src/.../Domain/RowDecision.cs
+public sealed record QuarantinedRow : RowDecision
+{
+    public QuarantinedRow(
+        RowNumber rowNumber,
+        FuelTransaction transaction,
+        IReadOnlyList&lt;QuarantineReason&gt; reasons,
+        IReadOnlyList&lt;UploadWarning&gt; warnings)
+    {
+        if (reasons.Count == 0)
+            throw new ArgumentException(
+                &quot;Quarantined rows require at least one reason.&quot;, nameof(reasons));
+        ...
+    }
+
+    public IReadOnlyList&lt;QuarantineReason&gt; Reasons { get; }
+    public IReadOnlyList&lt;UploadWarning&gt; Warnings { get; }
+}</code></pre>
+<p><code>IReadOnlyList&lt;T&gt;</code> denies the caller <code>.Add</code>. The record is immutable. And the constructor enforces a real invariant — a <code>QuarantinedRow</code> with zero reasons cannot exist.</p>
+<p><strong>Closed</strong>, with a footnote: <code>IReadOnlyList&lt;T&gt;</code> is a read-only <em>interface</em>, not a read-only value. If the <em>producer</em> keeps a reference to the underlying <code>List&lt;T&gt;</code> and mutates it later, the read-only view changes underneath the caller. Everything in this codebase builds the list eagerly and forgets the reference, so the practical risk is zero, but the language doesn&#x27;t make it impossible. <code>ImmutableArray&lt;T&gt;</code> would, at the cost of allocation.</p>
+<h3 id="footgun-5-status-as-a-string">Footgun #5 — status as a string</h3>
+<p>Normal C#:</p>
+<pre><code class="language-csharp">// normalcsharp/src/.../Models/RowDecision.cs:10
+public string Status;   // &quot;Quarantined&quot; or &quot;Quarantied&quot;, same to the compiler</code></pre>
+<p>Idiomatic C#:</p>
+<pre><code class="language-csharp">return decision switch
+{
+    RowDecision.AcceptedTransaction accepted             =&gt; AcceptedDto(&quot;accepted&quot;, ...),
+    RowDecision.AcceptedTransactionWithWarnings accepted =&gt; AcceptedDto(&quot;accepted_with_warnings&quot;, ...),
+    RowDecision.QuarantinedRow quarantined               =&gt; /* ... */,
+    RowDecision.SkippedDuplicate skipped                 =&gt; /* ... */,
+    RowDecision.RejectedRow rejected                     =&gt; RejectedDto(rejected),
+    RowDecision.FatalProcessingError fatal               =&gt; /* ... */,
+    _ =&gt; throw new InvalidOperationException(&quot;Unhandled row decision.&quot;)
+};</code></pre>
+<p>There is no <code>.Status</code> property to mistype. The discriminator is the runtime type. <code>RowDecision.Quarantied</code> doesn&#x27;t exist; the file won&#x27;t compile. The string <code>&quot;quarantined&quot;</code> is written <strong>once</strong>, in the DTO mapper, where it&#x27;s part of the JSON contract and is supposed to be a string.</p>
+<p><strong>Closed at the engine layer.</strong> The cost is real: string-based serialisation is now explicit map code, not free.</p>
+<h3 id="footgun-6-validator-that-throws-on-first-error">Footgun #6 — validator that throws on first error</h3>
+<p>Normal C#:</p>
+<pre><code class="language-csharp">// normalcsharp/src/.../Services/FuelRowValidator.cs
+public static void Validate(FuelRow row, ValidationConfig config)
+{
+    if (row.QuantityLiters &lt;= 0) throw new ValidationException(&quot;QuantityNotPositive&quot;);
+    if (row.QuantityLiters &gt; config.MaxQuantityLiters) throw new ValidationException(&quot;QuantityExceedsMaximum&quot;);
+    if (row.TotalCost &lt;= 0m) throw new ValidationException(&quot;CostNotPositive&quot;);
+    // ... etc, first one wins
+}</code></pre>
+<p>One bad row → one error → user fixes → one more error → user fixes → N round-trips.</p>
+<p>Idiomatic C#:</p>
+<pre><code class="language-csharp">// csharp/src/.../Engine/FuelRowValidator.cs
+public static IReadOnlyList&lt;ValidationError&gt; Validate(FuelRow row, ValidationConfig config)
+{
+    var errors = new List&lt;ValidationError&gt;();
+    if (string.IsNullOrWhiteSpace(row.VehicleIdentifier.Value))
+        errors.Add(new ValidationError(ValidationErrorCode.MissingVehicleIdentifier));
+    if (row.Quantity &lt;= 0)
+        errors.Add(new ValidationError(ValidationErrorCode.NonPositiveQuantity));
+    if (row.Quantity &gt; config.MaximumQuantity)
+        errors.Add(new ValidationError(ValidationErrorCode.QuantityExceedsMaximum));
+    if (row.UnitPrice &lt; 0)
+        errors.Add(new ValidationError(ValidationErrorCode.NegativeUnitPrice));
+    if (row.UnitPrice &gt; config.MaximumUnitPrice)
+        errors.Add(new ValidationError(ValidationErrorCode.UnitPriceExceedsMaximum));
+    if (row.TransactionDate &gt; config.Today)
+        errors.Add(new ValidationError(ValidationErrorCode.TransactionDateInFuture));
+    return errors;
+}</code></pre>
+<p><code>ValidationErrorCode</code> is an enum, not a string. The orchestrator folds the whole list into a single <code>RejectedRow</code> with a <code>RejectionReason.ValidationFailed(errors)</code>. No exceptions for control flow. Every check runs.</p>
+<p><strong>Closed.</strong> Cost: no short-circuit on the first failure. Each row pays for every check. The checks are nanoseconds; the saved user round-trips are hours. Trivial trade.</p>
+<h3 id="footgun-7-switch-statement-with-no-default">Footgun #7 — <code>switch</code> statement with no default</h3>
+<p>Normal C#:</p>
+<pre><code class="language-csharp">// normalcsharp/src/.../Services/FuelUploadService.cs:171
+switch (d.Status)
+{
+    case &quot;Accepted&quot;:             s.Accepted++; break;
+    case &quot;AcceptedWithWarnings&quot;: s.AcceptedWithWarnings++; break;
+    case &quot;Quarantined&quot;:          s.Quarantined++; break;
+    case &quot;Skipped&quot;:              s.Skipped++; break;
+    case &quot;Rejected&quot;:             s.Rejected++; break;
+    case &quot;Fatal&quot;:                s.Fatal++; break;
+    // no default: new statuses silently un-counted
+}</code></pre>
+<p>Idiomatic C# uses <code>switch</code> <em>expressions</em> over the sealed-record hierarchy, and the compiler emits <strong>CS8509: The switch expression does not handle all possible values of its input type</strong> when you forget a case. Treat warnings as errors and you have a compile-time check:</p>
+<pre><code class="language-csharp">return decision switch
+{
+    RowDecision.AcceptedTransaction accepted             =&gt; ...,
+    RowDecision.AcceptedTransactionWithWarnings accepted =&gt; ...,
+    RowDecision.QuarantinedRow quarantined               =&gt; ...,
+    RowDecision.SkippedDuplicate skipped                 =&gt; ...,
+    RowDecision.RejectedRow rejected                     =&gt; ...,
+    RowDecision.FatalProcessingError fatal               =&gt; ...,
+    _ =&gt; throw new InvalidOperationException(&quot;Unhandled row decision.&quot;)
+};</code></pre>
+<p><strong>The most honest answer here is: closed in practice, not closed by proof.</strong> That <code>_ =&gt; throw</code> arm is not decoration. The C# compiler emits CS8509 as a <em>warning</em>, on <em>flow analysis</em>, with documented holes (generic constraints, some value-type wrappers, certain composite patterns) where it stays silent. In a real DU language — F#, Haskell, Rust — the equivalent <code>_</code> arm would be unreachable by construction and the compiler would <em>refuse</em> the program if any case were missing. Here, the language asks you to write the runtime backstop yourself.</p>
+<p><strong>Six closed at compile time. One closed at code-review time, with a runtime safety net.</strong></p>
+<h2 id="what-can-still-go-wrong">What can still go wrong</h2>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart LR
+  subgraph Residual[&quot;Residual risks in idiomatic C#&quot;]
+    direction TB
+    R1[&quot;#1 Switch-expression exhaustiveness&lt;br/&gt;is a warning, not a proof.&lt;br/&gt;Manual _ =&gt; throw still required.&quot;]
+    R2[&quot;#2 NRT can be silenced with !&lt;br/&gt;somePossiblyNull!.Value bypasses it.&quot;]
+    R3[&quot;#3 DU encoding is verbose &amp; leaks&lt;br/&gt;nested namespace.Case names on&lt;br/&gt;every match arm; ctor-tag-only DUs&lt;br/&gt;look silly compared to F#.&quot;]
+    R4[&quot;#4 IReadOnlyList&amp;lt;T&amp;gt; is interface-readonly&lt;br/&gt;not value-readonly. Producer mutation&lt;br/&gt;still possible.&quot;]
+    R5[&quot;#5 String statuses live in DTOs&lt;br/&gt;The JSON boundary reintroduces&lt;br/&gt;&#x27;accepted&#x27;, &#x27;quarantined&#x27; as text&quot;]
+  end</code></pre></figure>
+<p>Four honest residuals, plus a fifth that belongs to Part 1b:</p>
+<ol><li><strong>Exhaustiveness is a warning, not a proof.</strong> Every switch in this codebase ends with <code>_ =&gt; throw new InvalidOperationException(...)</code>. That <code>throw</code> is there because C# does not <em>require</em> you to exhaust a sealed-record hierarchy. Flow analysis is best-effort.</li></ol>
+<ol><li><strong>NRT has an escape hatch.</strong> Any junior who writes <code>obj!.Member</code> to silence the compiler is back in the normal-branch world. NRT is a static analysis pass with a documented opt-out operator.</li></ol>
+<ol><li><strong>The DU encoding leaks.</strong> <code>RowDecision</code> is <code>abstract record</code> + nested <code>sealed record</code>s, simulating a sum type via closed inheritance. The cost: every consumer writes <code>RowDecision.AcceptedTransaction</code> on every match arm. Payload-less tag-only DUs (the five cases of <code>PreviousUploadOutcome</code>) look particularly silly next to F#&#x27;s one-line <code>RetryableFailure | ...</code>.</li></ol>
+<ol><li><strong><code>IReadOnlyList&lt;T&gt;</code> is interface-readonly, not value-readonly.</strong> Same as the footnote above.</li></ol>
+<ol><li><strong>The JSON boundary reintroduces string statuses.</strong> Inside the engine, status is a type. The DTO mapper still emits <code>&quot;accepted_with_warnings&quot;</code> and <code>&quot;quarantined&quot;</code> as JSON strings. See the coda.</li></ol>
+<h2 id="is-it-easier-to-read-easier-to-extend">Is it easier to read? Easier to extend?</h2>
+<p><strong>Easier to read</strong> if you know pattern matching, harder if you don&#x27;t. The <code>if/else</code> maze in <code>DuplicatePolicy</code> collapses into a single switch expression you can scan top-to-bottom. The <code>RowDecision</code> type is a one-glance summary of every possible outcome instead of a flat class with nine nullable fields and a string discriminator. Once you know the vocabulary, the code is shorter, denser, and tells you what it <em>can</em> and <em>cannot</em> do.</p>
+<p>For a beginner with no pattern-match experience, this is harder. More types, more files, more concepts (<code>abstract record</code>, type patterns, <code>record struct</code>, <code>IReadOnlyList&lt;T&gt;</code>), and the answer to &quot;where is the status determined?&quot; is &quot;by the runtime type of the value, not by a string field you can grep for.&quot;</p>
+<p><strong>Easier to extend.</strong> Add a seventh case — <code>RowDecision.HeldForApproval</code> for rows that need a human signoff. In the normal branch you add a string <code>&quot;HeldForApproval&quot;</code> somewhere, grep for <code>case &quot;Accepted&quot;:</code> lines, and <em>hope</em> you find them all. The <code>ComputeSummary</code> switch statement with no default will silently miss the new case.</p>
+<p>In the idiomatic branch, the moment you add <code>public sealed record HeldForApproval(...) : RowDecision</code>, every switch expression on <code>RowDecision</code> in the codebase starts emitting <strong>CS8509</strong>. The compiler hands you a list:</p>
+<ul><li><code>FuelUploadMapper.ToDecisionDto</code> — needs a new arm.</li><li><code>BatchSummaryCalculator.Summarize</code> — uses <code>.OfType&lt;&gt;().Count()</code>, won&#x27;t break compile, but a code-review check on this file is now mandatory.</li><li>Anywhere else? CS8509 will tell you. The runtime <code>_ =&gt; throw</code> arm is your second line of defence.</li></ul>
+<p>That asymmetry — &quot;compiler tells you where you forgot&quot; vs. &quot;grep and pray&quot; — is the whole reason to invest in this style. The seven footguns from chapter 03 are not really seven different bugs. They&#x27;re seven instances of the <strong>same</strong> bug: the language let the author forget a case. Idiomatic C# spends a lot of types to take that ability away.</p>
+<h2 id="where-this-still-leaks">Where this still leaks</h2>
+<p>The domain core is tight now. Six of seven footguns are gone from the classifier, the validator, and the per-row decision type. If your program is a pure <code>ClassifyBatch(BatchClassificationRequest) → BatchDecision</code>, you are done.</p>
+<p>The catch: real programs aren&#x27;t pure. They have a boundary — CSV imports arrive as cell-shaped strings, a repository call returns whatever the database driver hands you, an audit projection has to emit a <code>Status</code> column that humans search by, an operational report goes out as JSON with status text. Look at <code>Application/FuelUploadMapper.cs:333</code> and you&#x27;ll see the boundary right there — <code>&quot;accepted&quot;</code>, <code>&quot;accepted_with_warnings&quot;</code>, <code>&quot;quarantined&quot;</code> written out as raw string literals because the JSON contract demands them. Look at <code>Application/FuelUploadImportMapper.cs</code> and you&#x27;ll see CSV cells re-parsed. Look at <code>Application/RepositoryFuelUploadApplicationService.cs</code> and you&#x27;ll see — astonishingly — the repository result being marshalled <strong>back into a DTO with status strings</strong> before being mapped into the typed domain, because that lets the implementation reuse the existing mapper. Look at <code>Domain/Audit.cs</code> and you&#x27;ll see an <code>AuditRecordDto</code> with a <code>string Status</code> field next to the typed <code>AuditRecord</code> with <code>AuditEventKind</code>.</p>
+<p>The V3 honest finding for this branch, in one sentence: <em>raw string statuses remain prominent in DTOs and repository adapter glue.</em> The domain is type-safe. The edges are not. Part 1b walks through each boundary in turn and asks the same question the seven footguns did — which class of bug does the language structurally prevent here? — and gets a more uncomfortable answer.</p>
+<p>Start with <a href="../part1b/11-boundary-returns.html">chapter 11 — Boundary returns</a> for the full picture, then come back for F#, where the same boundary is modelled with native DUs and <strong>the leaks change shape</strong>.</p>
+    </article>
+    <footer class="pager">
+      <a class="pager-prev" href="03-seven-footguns.html">Previous: Seven footguns</a>
+      <a class="pager-next" href="05-fsharp-native.html">Next: F#: leaving C# behind</a>
+    </footer>
+  </main>
+</body>
+</html>

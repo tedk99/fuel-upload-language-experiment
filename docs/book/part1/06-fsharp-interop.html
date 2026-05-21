@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>F# interop: where the domain meets C# - Blub &amp; Fuel</title>
+  <link rel="stylesheet" href="../book.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="book-title" href="../index.html">Blub &amp; Fuel</a>
+    <nav><ol><li><a href="../index.html">Blub &amp; Fuel</a></li><li><a href="../setup.html">Setup</a></li><li><a href="01-blub-paradox.html">The Blub Paradox</a></li><li><a href="02-normal-csharp-tour.html">Tour: the normal C# fuel engine</a></li><li><a href="03-seven-footguns.html">Seven footguns</a></li><li><a href="04-idiomatic-csharp.html">Idiomatic C#: same language, modern features on</a></li><li><a href="05-fsharp-native.html">F#: leaving C# behind</a></li><li><a href="06-fsharp-interop.html" aria-current="page" class="active">F# interop: where the domain meets C#</a></li><li><a href="07-haskell-primer.html">A Haskell primer for C# developers</a></li><li><a href="08-haskell-safety.html">Haskell: making the bug unrepresentable</a></li><li><a href="09-rust-lands.html">Rust: a different goal, the same place</a></li><li><a href="10-the-punch.html">The punch: what each rung made impossible</a></li><li><a href="../part1b/11-boundary-returns.html">The boundary returns</a></li><li><a href="../part1b/12-boundary-side-by-side.html">Four engines at the boundary</a></li><li><a href="../part1b/13-final-takeaway.html">The final takeaway</a></li><li><a href="../part2/r1-decision.html">Modelling the row decision</a></li><li><a href="../part2/r2-validation.html">Validation and warnings</a></li><li><a href="../part2/r3-recovery.html">Duplicate / recovery policy</a></li><li><a href="../part2/r4-boundary.html">The boundary</a></li><li><a href="../part2/r5-exhaustiveness.html">Exhaustiveness</a></li><li><a href="../part2/r6-mutability.html">Mutability and identity</a></li><li><a href="../part2/r7-null.html">Null and absence</a></li><li><a href="../references.html">references</a></li></ol></nav>
+  </aside>
+  <main>
+    <header class="page-header">
+      <p class="kicker">Static reader</p>
+      <h1>F# interop: where the domain meets C#</h1>
+      <p class="source-link">Generated from <a href="../../../book/part1/06-fsharp-interop.qmd">part1/06-fsharp-interop.qmd</a>.</p>
+    </header>
+    <article>
+      <h2 id="the-clean-core-has-a-messy-edge">The clean core has a messy edge</h2>
+<p>The last chapter showed <code>Decision.fs</code> as a seven-line discriminated union and <code>DecisionEngine.fs</code> as a single pattern match on a tuple of three sum types. That&#x27;s the gorgeous part. That&#x27;s the part that closes six of the seven footguns by default behaviour of the language.</p>
+<p>But a .NET solution rarely has just one project. There is a C# ASP.NET controller that needs to deserialize JSON. There is a CSV importer that needs to take raw strings off a row. There is an audit log writer that needs flat records to push to BigQuery. There is a C# integration test calling <code>new FuelUploadFacade().Classify(...)</code> because the team hasn&#x27;t fully migrated.</p>
+<p><code>Interop.fs</code> is where that translation lives. It is one file — 800 lines as of V3 — and it is <strong>mostly <code>[&lt;CLIMutable&gt;]</code> records, string fields, and adapter code</strong>. Every guarantee the domain core earns, this file re-earns at the boundary.</p>
+<p>If the domain is F# being F#, the boundary is F# wearing a C# costume.</p>
+<h2 id="what-the-f-project-looks-like">What the F# project looks like</h2>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart LR
+  Caller[&quot;C# callers&lt;br/&gt;ASP.NET controllers&lt;br/&gt;CSV importer&lt;br/&gt;integration tests&lt;br/&gt;(string DTOs, possibly null)&quot;]
+
+  subgraph Boundary[&quot;Interop.fs — the costume layer&quot;]
+    direction TB
+    DTO[&quot;[&amp;lt;CLIMutable&amp;gt;] DTOs&lt;br/&gt;FuelUploadRequestDto&lt;br/&gt;FuelUploadResponseDto&lt;br/&gt;ImportBatchRequest&lt;br/&gt;(strings, arrays, no DUs)&quot;]
+    Parse[&quot;parse* functions&lt;br/&gt;parseUploadMode&lt;br/&gt;parsePreviousAttempt&lt;br/&gt;parseVehicleLookup&lt;br/&gt;parseDuplicateCheck&lt;br/&gt;(string -&gt; Result&amp;lt;DU, error list&amp;gt;)&quot;]
+    Ports[&quot;IVehicleRepository&lt;br/&gt;IDuplicateRepository&lt;br/&gt;(repository ports)&quot;]
+    Facade[&quot;FuelUploadFacade class&lt;br/&gt;RepositoryFuelUploadFacade&lt;br/&gt;(C#-shaped entry points)&quot;]
+    DTO --&gt; Parse
+    Parse --&gt; Facade
+    Ports --&gt; Facade
+  end
+
+  subgraph Core[&quot;Pure F# domain (chapter 05)&quot;]
+    direction TB
+    DE[&quot;DecisionEngine.classifyBatch&lt;br/&gt;typed DUs end-to-end&lt;br/&gt;no nulls&lt;br/&gt;exhaustive matching&quot;]
+  end
+
+  Caller --&gt; DTO
+  Facade --&gt; DE
+  DE --&gt; Facade
+  Facade --&gt; DTO
+
+  style Boundary fill:#fff5e6,stroke:#cc8800,stroke-width:2px
+  style Core     fill:#e6f5ff,stroke:#0066cc,stroke-width:2px</code></pre></figure>
+<p>The blue zone is the part the last chapter celebrated. The orange zone is what we are about to look at.</p>
+<p>Asymmetry: <strong>the domain is five files totaling around 250 lines. The boundary is one file at 800 lines.</strong> This is a common shape in F# applications that have to live alongside C#. The domain stays compact; the boundary absorbs all the costume-wearing.</p>
+<h2 id="climutable-a-deliberate-hole-in-the-safety-guarantee"><code>[&lt;CLIMutable&gt;]</code> — a deliberate hole in the safety guarantee</h2>
+<p>Here is a real DTO record from <code>Interop.fs</code>:</p>
+<pre><code class="language-fsharp">// fsharp-fuel-engine/FuelUpload.Domain/Interop.fs
+[&lt;CLIMutable&gt;]
+type FuelUploadRequestDto =
+    { UploadMode: string                    // string, not UploadMode DU
+      RequireExternalReference: bool
+      MinFuelVolumeGallons: decimal
+      MaxFuelVolumeGallons: decimal
+      MinTotalCost: decimal
+      MaxTotalCost: decimal
+      AllowFutureTransactions: bool
+      ProcessingDate: string                // string, not DateTimeOffset
+      HighFuelVolumeWarningGallons: decimal
+      HighCostPerGallonWarning: decimal
+      StaleTransactionWarningDays: int
+      SuspiciousFuelVolumeGallons: decimal
+      SuspiciousTotalCost: decimal
+      Rows: FuelUploadRowDto array }</code></pre>
+<p>Compare to the typed domain version in <code>Validation.fs</code>: <code>UploadMode</code> is a four-case DU. <code>ProcessingDate</code> is a <code>DateTimeOffset</code>. Here both are plain <code>string</code>. The boundary has been deliberately re-typed to the shape JSON gives you.</p>
+<p>What does <code>[&lt;CLIMutable&gt;]</code> actually do? Without the attribute, F# records are:</p>
+<ul><li><strong>immutable</strong> — once constructed, fields cannot be reassigned;</li><li><strong>closed to default construction</strong> — you cannot write <code>new FuelUploadRequestDto()</code> because the record requires every field to be supplied at construction;</li><li><strong>value-equal</strong> — two records with equal fields compare equal.</li></ul>
+<p><code>[&lt;CLIMutable&gt;]</code> keeps the equality behaviour but opens the other two: the compiler also emits a parameterless constructor and settable property setters so that C# callers, <code>System.Text.Json</code>, and ASP.NET&#x27;s model binder can do <code>new FuelUploadRequestDto { UploadMode = &quot;Retry&quot;, ... }</code> and have it work. The F# code in <code>Interop.fs</code> itself never <em>uses</em> those setters — it always constructs records with the full literal <code>{ ... }</code> syntax. But the type, at the CLR level, exposes a mutable shape.</p>
+<p>That is a <strong>deliberately carved hole</strong> in F#&#x27;s safety guarantee. A C# consumer of the DTO can:</p>
+<ul><li>Default-construct it: <code>new FuelUploadRequestDto()</code> — every string is <code>null</code>, every decimal is <code>0m</code>. F# would normally forbid this.</li><li>Mutate it after construction: <code>dto.UploadMode = null</code>. F# would normally forbid this too.</li><li>Pass <code>null</code> for any string field through the property setter.</li></ul>
+<p>The boundary is forced to assume any string can be null and any field can be defaulted. Look at the very first helper in the file:</p>
+<pre><code class="language-fsharp">let private normalize (value: string) =
+    if isNull value then
+        &quot;&quot;
+    else
+        value.Replace(&quot;_&quot;, &quot;&quot;).Trim().ToLowerInvariant()</code></pre>
+<p><code>isNull value</code> is the explicit null guard. F#&#x27;s own strings can never be null. But these strings came from C# through a <code>[&lt;CLIMutable&gt;]</code> record, so they can.</p>
+<p>The interop layer pays for <code>[&lt;CLIMutable&gt;]</code> with a guard at every single string field it reads.</p>
+<h2 id="re-earning-the-safety-boundary-parsers">Re-earning the safety: boundary parsers</h2>
+<p>Inside the domain, <code>UploadMode</code> is a four-case DU and you <code>match</code> on it. At the boundary, <code>UploadMode</code> came in as <code>dto.UploadMode : string</code>. Bridging the two takes an explicit parser:</p>
+<pre><code class="language-fsharp">let private parseUploadMode field value : Result&lt;UploadMode, FuelUploadMappingError list&gt; =
+    match normalize value with
+    | &quot;normal&quot;               -&gt; Ok UploadMode.Normal
+    | &quot;retry&quot;                -&gt; Ok UploadMode.Retry
+    | &quot;conservativerecovery&quot; -&gt; Ok UploadMode.ConservativeRecovery
+    | &quot;aggressiverecovery&quot;   -&gt; Ok UploadMode.AggressiveRecovery
+    | _ -&gt;
+        Error
+            [ { Code = FuelUploadMappingErrorCode.InvalidUploadMode
+                Field = field
+                Detail = $&quot;Unsupported upload mode &#x27;{value}&#x27;.&quot; } ]</code></pre>
+<p>This is the heart of what the boundary does. <strong>String in, typed <code>Result&lt;DU, error list&gt;</code> out.</strong> Once a string has passed through this function, the rest of the F# code can treat the value as a proper <code>UploadMode</code> DU and never has to think about case-sensitivity, typos, or normalisation again. The boundary has <em>re-earned</em> the type-system guarantee that the JSON layer washed away.</p>
+<p>There are six of these in the file: <code>parseUploadMode</code>, <code>parsePreviousAttempt</code>, <code>parseVehicleLookup</code>, <code>parseDuplicateCheck</code>, <code>parseDate</code>, plus a parallel set for the CSV importer (<code>parseImport*</code>) that returns the more permissive <code>FuelImportError</code> type. Each one returns <code>Result&lt;T, error list&gt;</code> instead of throwing — the boundary <strong>accumulates</strong> parse errors instead of failing on the first one. A malformed batch comes back with every field error at once, not just the first.</p>
+<p>The actual mapping function that ties three independent <code>Result</code>s together for one row:</p>
+<pre><code class="language-fsharp">let private mapRow index (row: FuelUploadRowDto) : Result&lt;FuelRowContext, FuelUploadMappingError list&gt; =
+    let prefix = $&quot;rows[{index}]&quot;
+    let occurredAt    = parseDate $&quot;{prefix}.occurredAt&quot; row.OccurredAt
+    let vehicleLookup = parseVehicleLookup prefix row
+    let duplicateCheck = parseDuplicateCheck prefix row
+
+    match occurredAt, vehicleLookup, duplicateCheck with
+    | Ok occurredAt, Ok vehicleLookup, Ok duplicateCheck -&gt;
+        Ok { Row = { /* fields */ }
+             VehicleLookup = vehicleLookup
+             DuplicateCheck = duplicateCheck }
+    | _ -&gt;
+        Error (errorsOf occurredAt @ errorsOf vehicleLookup @ errorsOf duplicateCheck)</code></pre>
+<p><code>@</code> is list concatenation. If all three results are <code>Ok</code>, build a <code>FuelRowContext</code>. If any are <code>Error</code>, concatenate every error list into one big error list. Three independent parses, all attempted, all reported. No first-fail-and-bail.</p>
+<p>There is no <code>Result&lt;T, E&gt;</code> library to import for this. <code>Result</code> and its operators (<code>Result.map</code>, <code>Result.bind</code>) ship in <code>FSharp.Core</code>.</p>
+<h2 id="adding-a-new-field-at-the-boundary">Adding a new field at the boundary</h2>
+<p>Suppose product adds a field to the upload request: <code>BatchReference</code> — an optional caller-supplied string to correlate batches in their logs. How does the change propagate?</p>
+<p><strong>In the domain:</strong> add <code>BatchReference: string option</code> (or a <code>BatchReference</code> typed value) to <code>ValidationConfig</code> or a new wrapper record. One file touched. If any pattern match destructures the record positionally, the compiler flags it.</p>
+<p><strong>At the boundary:</strong> more work.</p>
+<ol><li>Add <code>BatchReference: string</code> to <code>FuelUploadRequestDto</code> in <code>Interop.fs</code>.</li><li>Decide null-policy at the boundary. Is it optional (allow <code>null</code> from C#, parse to <code>None</code>)? Required (reject <code>null</code>)?</li><li>Add a <code>parseBatchReference</code> function returning <code>Result&lt;_, FuelUploadMappingError list&gt;</code>.</li><li>Thread the new parse through <code>toDomainRequest</code> — extend the thirteen-way tuple match.</li><li>Add the same field to <code>ImportBatchRequest</code> and <code>mapImportedRow</code> for the CSV path.</li><li>Add the same field to the response DTO if the response should echo it back.</li><li>Re-run any C# consumer projects to regenerate JSON contracts; recompile.</li></ol>
+<p>The C# consumers of the F# library see DTO changes the moment they recompile against the new <code>FuelUpload.Domain.dll</code>. Source-level: yes. Behaviour-level: their old code that ignored <code>BatchReference</code> still compiles, because the field is just <em>new on the record</em>. There is no exhaustiveness check at the boundary the way there is inside the domain.</p>
+<p>This is the asymmetry. <strong>Inside the domain, the type system is your backstop.</strong> Outside, the type system is something you re-impose, by hand, in <code>Interop.fs</code>. The further you walk out the boundary, the less help you get.</p>
+<h2 id="where-this-still-leaks-v3-coda">Where this still leaks (V3 coda)</h2>
+<p>In V2, <code>Interop.fs</code> was already the largest file in the project. V3 made it considerably larger. The current file holds, in one module:</p>
+<ul><li>The original JSON request/response DTOs (<code>FuelUploadRequestDto</code>, <code>FuelUploadResponseDto</code>).</li><li>A second, stricter set of CSV import DTOs (<code>ImportedFuelRow</code>, <code>ImportBatchRequest</code>, <code>FuelImportError</code>) that mirrors the first set but with all-string fields and parsing happening one layer earlier.</li><li>Repository port interfaces (<code>IVehicleRepository</code>, <code>IDuplicateRepository</code>) with their own error type families (<code>VehicleRepositoryError</code>, <code>DuplicateRepositoryError</code>).</li><li>A second classify path (<code>toRepositoryDomainRequest</code>, <code>classifyWithRepositories</code>) that uses the ports instead of inline DTO fields.</li><li>Response serialisation (<code>toDecisionDto</code>, <code>toResponseDto</code>, <code>warningText</code>/<code>rejectionText</code>/<code>quarantineText</code> formatters built on <code>sprintf &quot;%A&quot;</code>).</li><li>Two facade classes (<code>FuelUploadFacade</code>, <code>RepositoryFuelUploadFacade</code>) exposing all of the above to C# callers.</li></ul>
+<p>The V3 scoring report names this directly:</p>
+<blockquote><p><em>&quot;The interop module is large and mixes several adapter concerns; <code>[&lt;CLIMutable&gt;]</code> records and string DTO fields weaken the otherwise strong model for C# callers.&quot;</em> — <code>docs/v3-results.md</code></p></blockquote>
+<p>What is &quot;several adapter concerns&quot; hiding? Three jobs in one file:</p>
+<ol><li><strong>JSON wire format</strong> — <code>FuelUploadRequestDto</code> / <code>FuelUploadResponseDto</code>.</li><li><strong>CSV import format</strong> — <code>ImportBatchRequest</code> / <code>ImportedFuelRow</code>.</li><li><strong>Repository ports</strong> — <code>IVehicleRepository</code> / <code>IDuplicateRepository</code> plus their error families.</li></ol>
+<p>In a larger codebase these would be three separate modules with narrower public surfaces. Bundled into one file, they share helper functions (<code>normalize</code>, <code>require</code>, <code>errorsOf</code>) — which is convenient — but they also share blast radius: a change to the JSON DTO shape touches the same file as a change to the CSV import shape.</p>
+<p>The <code>%A</code> formatters are another leak. Quoting <code>toDecisionDto</code>:</p>
+<pre><code class="language-fsharp">| RowDecision.SkippedDuplicate skipped -&gt;
+    decisionDto
+        skipped.Row.RowNumber
+        &quot;skipped_duplicate&quot;
+        &quot;&quot;
+        &quot;&quot;
+        [||]
+        [||]
+        [||]
+        ($&quot;%A{skipped.Reason}&quot;)          // &lt;- prototype-grade output
+        &quot;&quot;</code></pre>
+<p><code>%A{skipped.Reason}</code> formats the <code>DuplicateSkipReason</code> DU using F#&#x27;s generic debug printer. The output is something like <code>&quot;RetryModeDuplicateNotRetryable Finalized&quot;</code> — which is fine for a prototype, but it ties the response wire format to the internal DU&#x27;s <em>name and shape</em>. If you rename a DU case for clarity, you&#x27;ve broken your JSON contract. The fix is a hand-written <code>match</code> per DU that emits stable lowercase strings, the same way <code>parseUploadMode</code> does the reverse mapping. The boundary should be <strong>symmetric</strong> — hand-mapped both ways — but the V3 implementation took the shortcut on the response side.</p>
+<p>Then there are the empty strings: when a <code>RowDecision.Accepted</code> row becomes a <code>FuelUploadDecisionDto</code>, fields like <code>DuplicateSkipReason</code> and <code>FatalError</code> are populated with <code>&quot;&quot;</code> instead of <code>null</code>. That&#x27;s because <code>[&lt;CLIMutable&gt;]</code> strings default to empty rather than null in the F# <code>{ ... }</code> literal — which is <em>safer</em> than <code>null</code>, but still requires the consumer to know that <code>&quot;&quot;</code> means &quot;absent&quot; rather than &quot;empty string.&quot; A more careful boundary would use <code>string option</code> and an opt-in JSON converter, but that&#x27;s more code than the prototype needed.</p>
+<h2 id="how-this-connects-to-the-other-engines">How this connects to the other engines</h2>
+<p>Every engine in this book hits the same wall at the boundary. The shape of the wall differs:</p>
+<ul><li><strong>Idiomatic C#</strong> has no boundary problem because its domain is <em>already</em> in C# — but its domain pays for that with the thirty-line-per-DU encoding from chapter 04.</li><li><strong>F# (this chapter)</strong> keeps the domain pristine and pays in one large <code>Interop.fs</code> file.</li><li><strong>Haskell</strong> keeps the domain even more pristine and pays at the FFI level — you&#x27;ll see in chapter 08 that the boundary is JSON via <code>aeson</code>, but everything outside the Haskell runtime is opaque to the Haskell type system.</li><li><strong>Rust</strong> has the boundary as <code>serde</code> derive macros and an explicit Vec-to-NonEmpty conversion, which we cover in chapter 09.</li></ul>
+<p>Part Ib gathers all four engine boundaries onto one page for direct comparison. If you want to see how the same <code>BatchReference</code>-style extension lands in each of the four, that&#x27;s the chapter to skip to:</p>
+<p><a href="../part1b/11-boundary-returns.html">Compare all four boundaries side-by-side →</a></p>
+<p>Otherwise, the next rung up the ladder is the type-driven extreme. F# made the safe choice the default. Haskell removes the unsafe choice entirely — no <code>[&lt;CLIMutable&gt;]</code> escape hatch, no nullable strings at the boundary, side effects tracked in the type signature, and exhaustive matching as a hard error rather than a warning.</p>
+<p><a href="07-haskell-primer.html">Next chapter →</a></p>
+    </article>
+    <footer class="pager">
+      <a class="pager-prev" href="05-fsharp-native.html">Previous: F#: leaving C# behind</a>
+      <a class="pager-next" href="07-haskell-primer.html">Next: A Haskell primer for C# developers</a>
+    </footer>
+  </main>
+</body>
+</html>

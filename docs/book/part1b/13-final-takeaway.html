@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The final takeaway - Blub &amp; Fuel</title>
+  <link rel="stylesheet" href="../book.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="book-title" href="../index.html">Blub &amp; Fuel</a>
+    <nav><ol><li><a href="../index.html">Blub &amp; Fuel</a></li><li><a href="../setup.html">Setup</a></li><li><a href="../part1/01-blub-paradox.html">The Blub Paradox</a></li><li><a href="../part1/02-normal-csharp-tour.html">Tour: the normal C# fuel engine</a></li><li><a href="../part1/03-seven-footguns.html">Seven footguns</a></li><li><a href="../part1/04-idiomatic-csharp.html">Idiomatic C#: same language, modern features on</a></li><li><a href="../part1/05-fsharp-native.html">F#: leaving C# behind</a></li><li><a href="../part1/06-fsharp-interop.html">F# interop: where the domain meets C#</a></li><li><a href="../part1/07-haskell-primer.html">A Haskell primer for C# developers</a></li><li><a href="../part1/08-haskell-safety.html">Haskell: making the bug unrepresentable</a></li><li><a href="../part1/09-rust-lands.html">Rust: a different goal, the same place</a></li><li><a href="../part1/10-the-punch.html">The punch: what each rung made impossible</a></li><li><a href="11-boundary-returns.html">The boundary returns</a></li><li><a href="12-boundary-side-by-side.html">Four engines at the boundary</a></li><li><a href="13-final-takeaway.html" aria-current="page" class="active">The final takeaway</a></li><li><a href="../part2/r1-decision.html">Modelling the row decision</a></li><li><a href="../part2/r2-validation.html">Validation and warnings</a></li><li><a href="../part2/r3-recovery.html">Duplicate / recovery policy</a></li><li><a href="../part2/r4-boundary.html">The boundary</a></li><li><a href="../part2/r5-exhaustiveness.html">Exhaustiveness</a></li><li><a href="../part2/r6-mutability.html">Mutability and identity</a></li><li><a href="../part2/r7-null.html">Null and absence</a></li><li><a href="../references.html">references</a></li></ol></nav>
+  </aside>
+  <main>
+    <header class="page-header">
+      <p class="kicker">Static reader</p>
+      <h1>The final takeaway</h1>
+      <p class="source-link">Generated from <a href="../../../book/part1b/13-final-takeaway.qmd">part1b/13-final-takeaway.qmd</a>.</p>
+    </header>
+    <article>
+      <h2 id="two-lessons">Two lessons</h2>
+<p>This book has now made two arguments. The first was Part I: <em>types make domain bugs unrepresentable</em>. The second is Part Ib: <em>the bugs come back at the edges, and types help there too</em>.</p>
+<p>The two arguments together are the version of the blub-paradox lesson that matters for someone actually shipping a fuel-upload system. It is not enough for the language to model the domain. It also has to keep the boundary out of the domain. A clean pure function bolted to a CSV parser that hands you nullable strings is one careless <code>??</code> away from the same bugs the pure function was designed to prevent.</p>
+<p>V1 and V2 closed the first half. V3 closed the second half.</p>
+<h2 id="what-to-recommend-a-junior-at-fieldale">What to recommend a junior at Fieldale</h2>
+<p>If a junior on the team asks &quot;what should I read, and what should I write?&quot;, here is the honest answer that this experiment supports.</p>
+<p><strong>Read this book.</strong> Both parts. Part I lands the vocabulary — discriminated unions, exhaustive matching, non-empty types, nullability tracking, typed errors. Part Ib lands the integration discipline — boundary translation, repository ports, typed projection, derive-don&#x27;t-rebuild.</p>
+<p><strong>Write idiomatic C# first.</strong> If you are going to touch .NET production code, your day-to-day language is C#. The <a href="../part1/04-idiomatic-csharp.html">Idiomatic C#</a> chapter from Part I shows the shape: sealed-record discriminated unions, switch expressions on type patterns, <code>IReadOnlyList&lt;T&gt;</code>, NRT on. That code closes six of the seven domain footguns and most of the V3 boundary risks. The remaining gap — runtime-enforced exhaustiveness instead of compile-time — is closed by tests, which a typical .NET shop already has.</p>
+<p><strong>If you can introduce an F# project, do it for the domain core.</strong> The V3 result is unambiguous: F# inside a .NET solution is the strongest combined shape this experiment found. The shape that works is a small F# <code>*.Domain</code> project — types, decision engine, projectors — called from C# at the framework edges. Not a wholesale rewrite. A typed island. The C# team owns controllers, dependency injection, database adapters, and serialization. The F# project owns discriminated unions, exhaustive matching, and the rules. The <a href="https://github.com/tedk99/experiment-normalcsharp/blob/main/docs/fsharp-learning-guide.md">F# learning guide</a> in the repository is the how-to for that.</p>
+<p><strong>Treat Haskell as the reference oracle.</strong> When someone says &quot;is this domain modelled tightly?&quot;, the Haskell implementation is the answer. It has the strongest algebraic shape, the only property-based tests in the experiment, and the cleanest decision engine. It is also not a realistic production target for a .NET shop and the V3 audit was explicit about it:</p>
+<blockquote><p>Production suitability for a C#/.NET-heavy business app: low. Tooling, hiring, deployment, and interop costs dominate despite the excellent core model.</p></blockquote>
+<blockquote><p>Reference implementation suitability: highest.</p></blockquote>
+<p>Use it the way you would use a textbook. Read it to know whether your F# or C# model is missing something.</p>
+<p><strong>Treat Rust as a parallel option, not a .NET option.</strong> If the team ever builds a fuel-import service as a standalone Rust binary — because the workload is throughput-sensitive, because there is a separate team that prefers Rust, because there is a Wasm story — the V3 Rust implementation shows it works. Strong enum discipline, exhaustive <code>match</code>, good tooling feedback. It is not the recommendation <em>inside</em> the .NET solution.</p>
+<h2 id="the-updated-closer">The updated closer</h2>
+<p>The V2 takeaway was <em>each rung of the ladder makes a class of error unrepresentable</em>. The V3 takeaway updates that. Types help most at the <em>boundary</em>, because the boundary is where messy reality tries to push slop back into the domain.</p>
+<p>The pure decision engine in any of the four V3 languages is fine. The work that matters in production happens at the four edges:</p>
+<ul><li>CSV import → typed application DTOs, with typed errors at the edge.</li><li>Repository ports → typed lookup results that reach the domain without a string round-trip.</li><li>Audit projection → exhaustive pattern match on <code>RowDecision</code>, with text rendered only at the final DTO step.</li><li>Operational report → derived from <code>BatchDecision</code>, not from raw rows.</li></ul>
+<p>A language that makes those four shapes natural is doing more work than a language that just makes the pure decision engine natural. F# makes all four natural in a .NET-shaped solution; C# makes three of them natural and the fourth recoverable with tests; Haskell and Rust each make all four natural but outside the .NET production shape.</p>
+<h2 id="where-to-read-next">Where to read next</h2>
+<p>There is a Part II reference in this book for any topic from Part I or Part Ib you want to see in five-language side-by-side form:</p>
+<ul><li><a href="../part2/r1-decision.html">Modelling the decision</a></li><li><a href="../part2/r2-validation.html">Validation</a></li><li><a href="../part2/r3-recovery.html">Recovery policy</a></li><li><a href="../part2/r4-boundary.html">The boundary</a></li><li><a href="../part2/r5-exhaustiveness.html">Exhaustiveness</a></li><li><a href="../part2/r6-mutability.html">Mutability</a></li><li><a href="../part2/r7-null.html">Null and missing values</a></li></ul>
+<p>For the V3 work specifically, the primary documents in the repository are:</p>
+<ul><li><code>docs/v3-results.md</code> — the full V3 scoring, with per-language verdicts and the answers to ten cross-language findings.</li><li><code>docs/v3-experiment-plan.md</code> — what V3 was set up to test and why.</li><li><code>docs/v3-phase-briefing.md</code> — the phase-by-phase good/bad shapes with C# examples.</li><li><code>docs/v3-scoring-rubric.md</code> — the seven categories the V3 scoring rolled up.</li><li><code>docs/fsharp-learning-guide.md</code> — the team-facing how-to for using F# inside the .NET solution, including a worked example of adding a new quarantine reason safely.</li><li><code>docs/agent-notes/</code> — per-phase decisions and tradeoffs.</li></ul>
+<p>The source code for each of the four V3 engines lives under <code>csharp-fuel-engine/</code>, <code>fsharp-fuel-engine/</code>, <code>haskell-fuel-engine/</code>, and <code>rust-fuel-engine/</code>. Each has its own <code>AGENTS.md</code> with the module map, key types, and known limitations.</p>
+<h2 id="one-sentence">One sentence</h2>
+<p>If Part I taught you a vocabulary for <em>what your current language is missing</em>, Part Ib taught you a discipline for <em>what to do at the edge</em>. The domain can be clean. The boundary is where slop tries to sneak back in. Types help most when they protect the boundary between messy reality and the domain — and the language that protects that boundary cheapest, inside a .NET shop, is F#.</p>
+<p>That is the answer this experiment landed on. Read the chapters again when you forget why.</p>
+    </article>
+    <footer class="pager">
+      <a class="pager-prev" href="12-boundary-side-by-side.html">Previous: Four engines at the boundary</a>
+      <a class="pager-next" href="../part2/r1-decision.html">Next: Modelling the row decision</a>
+    </footer>
+  </main>
+</body>
+</html>

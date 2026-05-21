@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>F#: leaving C# behind - Blub &amp; Fuel</title>
+  <link rel="stylesheet" href="../book.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="book-title" href="../index.html">Blub &amp; Fuel</a>
+    <nav><ol><li><a href="../index.html">Blub &amp; Fuel</a></li><li><a href="../setup.html">Setup</a></li><li><a href="01-blub-paradox.html">The Blub Paradox</a></li><li><a href="02-normal-csharp-tour.html">Tour: the normal C# fuel engine</a></li><li><a href="03-seven-footguns.html">Seven footguns</a></li><li><a href="04-idiomatic-csharp.html">Idiomatic C#: same language, modern features on</a></li><li><a href="05-fsharp-native.html" aria-current="page" class="active">F#: leaving C# behind</a></li><li><a href="06-fsharp-interop.html">F# interop: where the domain meets C#</a></li><li><a href="07-haskell-primer.html">A Haskell primer for C# developers</a></li><li><a href="08-haskell-safety.html">Haskell: making the bug unrepresentable</a></li><li><a href="09-rust-lands.html">Rust: a different goal, the same place</a></li><li><a href="10-the-punch.html">The punch: what each rung made impossible</a></li><li><a href="../part1b/11-boundary-returns.html">The boundary returns</a></li><li><a href="../part1b/12-boundary-side-by-side.html">Four engines at the boundary</a></li><li><a href="../part1b/13-final-takeaway.html">The final takeaway</a></li><li><a href="../part2/r1-decision.html">Modelling the row decision</a></li><li><a href="../part2/r2-validation.html">Validation and warnings</a></li><li><a href="../part2/r3-recovery.html">Duplicate / recovery policy</a></li><li><a href="../part2/r4-boundary.html">The boundary</a></li><li><a href="../part2/r5-exhaustiveness.html">Exhaustiveness</a></li><li><a href="../part2/r6-mutability.html">Mutability and identity</a></li><li><a href="../part2/r7-null.html">Null and absence</a></li><li><a href="../references.html">references</a></li></ol></nav>
+  </aside>
+  <main>
+    <header class="page-header">
+      <p class="kicker">Static reader</p>
+      <h1>F#: leaving C# behind</h1>
+      <p class="source-link">Generated from <a href="../../../book/part1/05-fsharp-native.qmd">part1/05-fsharp-native.qmd</a>.</p>
+    </header>
+    <article>
+      <h2 id="same-runtime-different-language">Same runtime, different language</h2>
+<p>F# is .NET. Same CLR, same <code>decimal</code>, same NuGet, same Visual Studio, same <code>dotnet test</code>. You can reference an F# project from a C# project and call into it like any other library. From the build system&#x27;s perspective, nothing exotic is happening.</p>
+<p>But the <strong>language</strong> is different. F# is what you get when ML-family people are allowed to ship on the CLR. Native discriminated unions. Exhaustive <code>match</code> that the compiler will flag for you — and that you can turn into a hard error with one project setting. Immutability by default; you opt <strong>in</strong> to mutability, not out. F#&#x27;s own types don&#x27;t have <code>null</code>.</p>
+<p>The idiomatic C# from the previous chapter closed six of the seven footguns. It did so by <strong>simulating</strong> features the language doesn&#x27;t have: sealed-record DUs with a private constructor, <code>IReadOnlyList&lt;T&gt;</code> instead of <code>List&lt;T&gt;</code>, switch expressions with a <code>_ =&gt; throw</code> arm so the compiler stays quiet. Each simulation works. Each one leaves a smell.</p>
+<p>From up here, those smells look like what they are: workarounds for features F# ships natively.</p>
+<h2 id="the-same-type-two-languages">The same type, two languages</h2>
+<p><code>RowDecision</code> is the centerpiece of both pipelines. Here it is in idiomatic C#:</p>
+<pre><code class="language-csharp">// csharp-fuel-engine/src/FuelUploadEngine/Domain/RowDecision.cs
+public abstract record RowDecision
+{
+    private RowDecision() { }
+
+    public sealed record AcceptedTransaction(FuelTransaction Transaction) : RowDecision;
+
+    public sealed record AcceptedTransactionWithWarnings(
+        FuelTransaction Transaction,
+        IReadOnlyList&lt;UploadWarning&gt; Warnings) : RowDecision;
+
+    public sealed record QuarantinedRow : RowDecision
+    {
+        public QuarantinedRow(
+            RowNumber rowNumber,
+            FuelTransaction transaction,
+            IReadOnlyList&lt;QuarantineReason&gt; reasons,
+            IReadOnlyList&lt;UploadWarning&gt; warnings)
+        {
+            if (reasons.Count == 0)
+                throw new ArgumentException(&quot;Quarantined rows require at least one reason.&quot;, nameof(reasons));
+            // ... assign properties ...
+        }
+        // ... property declarations ...
+    }
+
+    public sealed record SkippedDuplicate(RowNumber RowNumber, DuplicateState Duplicate, DuplicateSkipCode Reason) : RowDecision;
+    public sealed record RejectedRow(RowNumber RowNumber, RejectionReason Reason) : RowDecision;
+    public sealed record FatalProcessingError(RowNumber RowNumber, FatalError Error) : RowDecision;
+}</code></pre>
+<p>Roughly forty lines once you include the constructor invariant on <code>QuarantinedRow</code>. Now the same type in F#:</p>
+<pre><code class="language-fsharp">// fsharp-fuel-engine/FuelUpload.Domain/Decision.fs
+[&lt;RequireQualifiedAccess&gt;]
+type RowDecision =
+    | Accepted of AcceptedTransaction
+    | AcceptedWithWarnings of AcceptedTransaction * Warning list
+    | Quarantined of QuarantinedRow
+    | SkippedDuplicate of SkippedDuplicate
+    | Rejected of RejectedRow
+    | Fatal of FatalProcessingError</code></pre>
+<p><strong>Seven lines, no ceremony.</strong> No <code>private RowDecision()</code> to lock the hierarchy closed. No <code>sealed record</code> per case. No hand-written constructor invariant — the &quot;quarantine has at least one reason&quot; invariant is enforced one file over by a private constructor on a <code>QuarantineReasons</code> wrapper type, applied once instead of per-case.</p>
+<p>The consumer side is symmetric. Idiomatic C# uses a switch expression that&#x27;s <em>almost</em> exhaustive but has to close itself with a default arm:</p>
+<pre><code class="language-csharp">return duplicateCheck switch
+{
+    DuplicateCheckResult.NotDuplicate notDuplicate =&gt; CreateAcceptedDecision(...),
+    DuplicateCheckResult.Duplicate duplicate      =&gt; DuplicatePolicy.Classify(...) ?? CreateAcceptedDecision(...),
+    _ =&gt; throw new InvalidOperationException(&quot;Unhandled duplicate check result.&quot;)
+};</code></pre>
+<p>That <code>_ =&gt; throw</code> is the price of doing DUs in a language that doesn&#x27;t have them. The compiler will check the <em>declared</em> arms for type-correctness, but once you write <code>_ =&gt; ...</code> it stops asking about new cases. F# has no equivalent need:</p>
+<pre><code class="language-fsharp">match Validation.validateConfig config, vehicleLookup, duplicateCheck with
+| fatal :: _, _, _                              -&gt; RowDecision.Fatal fatal
+| _, VehicleLookupResult.Fatal fatal, _         -&gt; RowDecision.Fatal fatal
+| _, _, DuplicateCheckResult.Fatal fatal        -&gt; RowDecision.Fatal fatal
+| [], _, _                                      -&gt; ...</code></pre>
+<p>That&#x27;s a pattern match on a <strong>tuple of three sum types simultaneously</strong>, and the F# compiler will warn if any combination is unreachable or missing. We&#x27;ll come back to the &quot;missing&quot; case in a minute.</p>
+<h2 id="the-f-domain-layout">The F# domain layout</h2>
+<p>Six files, compiled in this order. F# has no forward references; the file order in the <code>.fsproj</code> is the dependency graph.</p>
+<figure class="diagram"><figcaption>Mermaid diagram source</figcaption><pre><code class="language-mermaid">flowchart TD
+  P[Primitives.fs&lt;br/&gt;UploadMode DU&lt;br/&gt;FatalProcessingError DU]
+  FR[FuelRow.fs&lt;br/&gt;ParsedFuelRow record]
+  V[Vehicle.fs&lt;br/&gt;Vehicle record&lt;br/&gt;VehicleLookupResult DU]
+  D[Duplicate.fs&lt;br/&gt;PreviousAttemptState DU&lt;br/&gt;DuplicateCheckResult DU&lt;br/&gt;DuplicateSkipReason DU]
+  Dec[Decision.fs&lt;br/&gt;AcceptedTransaction&lt;br/&gt;RejectedRow / SkippedDuplicate&lt;br/&gt;QuarantinedRow&lt;br/&gt;RowDecision DU&lt;br/&gt;FuelRowContext / ClassifiedRow]
+  Val[Validation.fs&lt;br/&gt;ValidationConfig&lt;br/&gt;ValidationError / Warning / QuarantineReason DUs&lt;br/&gt;QuarantineReasons NonEmpty wrapper&lt;br/&gt;pure validate / warnings / quarantine functions]
+  BS[BatchSummary.fs&lt;br/&gt;summarize: ClassifiedRow list -&gt; BatchSummary]
+  DE[DecisionEngine.fs&lt;br/&gt;classifyRow&lt;br/&gt;classifyBatch]
+
+  P --&gt; FR
+  P --&gt; V
+  P --&gt; D
+  FR --&gt; Dec
+  V --&gt; Dec
+  D --&gt; Dec
+  Dec --&gt; Val
+  Dec --&gt; BS
+  Val --&gt; DE
+  BS --&gt; DE
+
+  style Dec fill:#e6f5ff,stroke:#0066cc,stroke-width:2px
+  style DE  fill:#e6f5ff,stroke:#0066cc,stroke-width:2px</code></pre></figure>
+<p>The whole pure domain is around 400 lines. Idiomatic C# is closer to a thousand for the same problem, because every DU costs roughly thirty lines of encoding ceremony and every collection needs <code>IReadOnlyList&lt;T&gt;</code> wrappers written explicitly.</p>
+<h2 id="the-recovery-matrix">The recovery matrix</h2>
+<p>This is the climax. The fuel domain has four <code>UploadMode</code> cases and six <code>PreviousAttemptState</code> cases, which means twenty-four <code>(mode, state)</code> combinations, plus the &quot;no duplicate&quot; shortcut. The interesting subset — what each recovery mode is allowed to accept — is a <strong>matrix</strong>.</p>
+<p>Idiomatic C# writes it as a sequence of <code>if</code> statements on <code>PreviousUploadOutcome</code>-like fields plus a delegate to <code>DuplicatePolicy.ClassifyDuplicate</code>:</p>
+<pre><code class="language-csharp">// csharp-fuel-engine/src/FuelUploadEngine/Engine/FuelUploadDecisionEngine.cs
+return duplicateCheck switch
+{
+    DuplicateCheckResult.NotDuplicate notDuplicate =&gt; CreateAcceptedDecision(...),
+    DuplicateCheckResult.Duplicate duplicate =&gt; DuplicatePolicy.ClassifyDuplicate(
+            row, vehicle, duplicate.State, validationConfig, mode)
+        ?? CreateAcceptedDecision(row, vehicle, duplicate.State.ExistingTransactionKey, validationConfig),
+    _ =&gt; throw new InvalidOperationException(&quot;Unhandled duplicate check result.&quot;)
+};</code></pre>
+<p>The actual matrix is hidden inside <code>DuplicatePolicy.ClassifyDuplicate</code> — a separate file with its own <code>switch</code> on <code>(mode, state)</code>, returning <code>RowDecision?</code> and using <code>null</code> to mean &quot;fall through to accepted.&quot;</p>
+<p>F# inlines the entire matrix in <code>DecisionEngine.fs</code>. Quoted verbatim:</p>
+<pre><code class="language-fsharp">// fsharp-fuel-engine/FuelUpload.Domain/DecisionEngine.fs
+match mode, duplicateCheck with
+| _, DuplicateCheckResult.NoDuplicate -&gt;
+    accepted config mode row vehicle
+| UploadMode.Normal, DuplicateCheckResult.Duplicate previous -&gt;
+    skipped row mode previous DuplicateSkipReason.NormalModeDuplicate
+| UploadMode.Retry, DuplicateCheckResult.Duplicate PreviousAttemptState.RetryableFailure -&gt;
+    accepted config mode row vehicle
+| UploadMode.Retry, DuplicateCheckResult.Duplicate PreviousAttemptState.Finalized -&gt;
+    skipped row mode PreviousAttemptState.Finalized
+        DuplicateSkipReason.RetryModeDuplicateAlreadyFinalized
+| UploadMode.Retry, DuplicateCheckResult.Duplicate previous -&gt;
+    skipped row mode previous (DuplicateSkipReason.RetryModeDuplicateNotRetryable previous)
+| UploadMode.ConservativeRecovery,
+  DuplicateCheckResult.Duplicate PreviousAttemptState.FailedBeforeCanonicalFinalization -&gt;
+    accepted config mode row vehicle
+| UploadMode.ConservativeRecovery, DuplicateCheckResult.Duplicate previous -&gt;
+    skipped row mode previous
+        (DuplicateSkipReason.RecoveryModeDuplicateAlreadyCanonicalized previous)
+| UploadMode.AggressiveRecovery,
+  DuplicateCheckResult.Duplicate PreviousAttemptState.FailedBeforeCanonicalFinalization -&gt;
+    accepted config mode row vehicle
+| UploadMode.AggressiveRecovery,
+  DuplicateCheckResult.Duplicate
+      PreviousAttemptState.FailedAfterCanonicalizationWithoutCanonicalTransactionKey -&gt;
+    accepted config mode row vehicle
+| UploadMode.AggressiveRecovery, DuplicateCheckResult.Duplicate previous -&gt;
+    skipped row mode previous
+        (DuplicateSkipReason.RecoveryModeDuplicateAlreadyCanonicalized previous)
+| _, DuplicateCheckResult.Fatal fatal -&gt;
+    RowDecision.Fatal fatal</code></pre>
+<p>Every accepted-by-recovery case is a <strong>typed pattern</strong>, not a boolean check on a flag. There are no <code>if (previous.WasCanonicalized)</code> branches, no <code>?? CreateAccepted</code>, no nullable return. The cases that aren&#x27;t listed (e.g. <code>Retry</code> + <code>Finalized</code> is listed, but <code>Retry</code> + <code>FailedAfterCanonicalizationWithCanonicalTransactionKey</code> is <strong>not</strong> listed by name) fall through to the catch-all <code>Duplicate previous</code> pattern earlier in the same arm — which the compiler can see is total because every <code>(mode, state)</code> pair has <em>some</em> match.</p>
+<p>If you compare to the C# <code>DuplicatePolicy.ClassifyDuplicate(...) ?? CreateAcceptedDecision(...)</code> expression: the <code>??</code> is doing the work that pattern fall-through does in F#, and that single <code>??</code> is the only thing standing between a row that should have been skipped and a silent acceptance, if the policy table forgets a case.</p>
+<p>In F#, forgetting a case is a compiler warning at this exact site.</p>
+<h2 id="adding-a-7th-rowdecision-case">Adding a 7th <code>RowDecision</code> case</h2>
+<p>Suppose product comes back next quarter: there&#x27;s a seventh outcome, <code>HeldForReview</code> — the row passed validation, isn&#x27;t a duplicate, but matches a fraud signal that needs human eyes before the canonical write.</p>
+<p><strong>In F#.</strong> Step 1, add the case:</p>
+<pre><code class="language-fsharp">type RowDecision =
+    | Accepted of AcceptedTransaction
+    | AcceptedWithWarnings of AcceptedTransaction * Warning list
+    | Quarantined of QuarantinedRow
+    | SkippedDuplicate of SkippedDuplicate
+    | Rejected of RejectedRow
+    | Fatal of FatalProcessingError
+    | HeldForReview of AcceptedTransaction * HeldReason   // &lt;- one new line</code></pre>
+<p>Step 2, compile. Every <code>match</code> expression on <code>RowDecision</code> anywhere in the solution now reports:</p>
+<blockquote><p><strong>FS0025: Incomplete pattern matches on this expression.</strong> For example, the value <code>HeldForReview (_, _)</code> may indicate a case not covered by the pattern(s).</p></blockquote>
+<p>The compiler tells you exactly which sites. <code>BatchSummary.summarize</code> will flag. <code>Interop.toDecisionDto</code> will flag. Any consumer in the solution that pattern-matches on <code>RowDecision</code> will flag. The warning resolves only when every site handles the case.</p>
+<p>With <code>&lt;TreatWarningsAsErrors&gt;true&lt;/TreatWarningsAsErrors&gt;</code> (or the narrower <code>&lt;WarningsAsErrors&gt;25&lt;/WarningsAsErrors&gt;</code>) in the <code>.fsproj</code>, it&#x27;s a <strong>hard build break</strong>.</p>
+<p><strong>In idiomatic C#.</strong> Step 1, add the case:</p>
+<pre><code class="language-csharp">public sealed record HeldForReview(FuelTransaction Transaction, HeldReason Reason) : RowDecision;</code></pre>
+<p>Step 2, compile. <strong>Nothing happens.</strong> The switch expressions in <code>FuelUploadDecisionEngine</code>, <code>BatchSummaryCalculator</code>, the response mapper — all have a <code>_ =&gt; throw new InvalidOperationException(...)</code> arm. They all still compile. They all still pass their existing tests.</p>
+<p>At runtime, the first <code>HeldForReview</code> decision hits the default arm and throws. You discover this in production, on a row whose payment team is now waiting on a fraud team that doesn&#x27;t know it has work.</p>
+<p>This is <strong>Footgun 3 ported into idiomatic C#</strong>. The encoding is cleaner. The underlying gap remains: C# can&#x27;t enforce exhaustive matching across an open hierarchy, and the <code>_ =&gt;</code> arm makes every closed hierarchy effectively open.</p>
+<div class="table-wrap"><table><thead><tr><th>Cost to add a case</th><th>F#</th><th>Idiomatic C#</th></tr></thead><tbody><tr><td>Lines to modify the DU</td><td>1</td><td>1</td></tr><tr><td>Compiler help finding sites</td><td>yes (FS0025 at every site)</td><td>no (<code>_ =&gt;</code> arms hide them)</td></tr><tr><td>Failure mode if you miss one</td><td>warning/error at compile</td><td><code>InvalidOperationException</code> at runtime</td></tr></tbody></table></div>
+<h2 id="easier-or-harder-to-read">Easier or harder to read?</h2>
+<p>Honest answer: <strong>both</strong>. Less code, but the code is denser. The concepts are unfamiliar.</p>
+<p>A junior reading this snippet for the first time sees four ideas stacked into four lines:</p>
+<pre><code class="language-fsharp">match Validation.validateConfig config, vehicleLookup, duplicateCheck with
+| fatal :: _, _, _                       -&gt; RowDecision.Fatal fatal
+| _, VehicleLookupResult.Fatal fatal, _  -&gt; RowDecision.Fatal fatal
+| _, _, DuplicateCheckResult.Fatal fatal -&gt; RowDecision.Fatal fatal
+| [], _, _                               -&gt; ...</code></pre>
+<p>That&#x27;s tuple construction, list deconstruction (<code>fatal :: _</code> means &quot;non-empty list, take the head&quot;), wildcard patterns, and DU case patterns. A first-time reader has to learn all four to parse the snippet at all.</p>
+<p>The equivalent idiomatic C# is more verbose but uses concepts every C# dev already knows:</p>
+<pre><code class="language-csharp">if (vehicleLookup is VehicleLookupResult.Unavailable vehicleUnavailable)
+    return new RowDecision.FatalProcessingError(row.RowNumber, vehicleUnavailable.Error);
+
+if (duplicateCheck is DuplicateCheckResult.Unavailable duplicateUnavailable)
+    return new RowDecision.FatalProcessingError(row.RowNumber, duplicateUnavailable.Error);</code></pre>
+<p><code>if</code>, <code>is</code>, <code>return</code>. Three keywords. Lower density — you read more lines to learn less — but you don&#x27;t need to learn anything new to read it.</p>
+<p>The honest verdict: <strong>once you&#x27;re past week one of F#, the F# code is dramatically easier to read</strong> because the structure of the code matches the structure of the problem. Sum types in, sum types out, exhaustive match in the middle. The whole recovery matrix fits on one screen and each row of the matrix is a row of code.</p>
+<p>But week one is a real cost. The <code>|&gt;</code> pipe, the <code>::</code> cons, the <code>_</code> for &quot;don&#x27;t care,&quot; the way <code>match</code> returns a value instead of falling out the bottom, the <code>[&lt;RequireQualifiedAccess&gt;]</code> attribute — every one of those is a new concept. There is no language equivalent of &quot;you already know this from C#.&quot; If your team is new to F#, the learning curve is non-trivial and lasts roughly a quarter.</p>
+<h2 id="what-still-leaks">What still leaks</h2>
+<p>F# isn&#x27;t a free lunch. The same CLR that gives you <code>decimal</code> and <code>DateTimeOffset</code> also gives you <code>NullReferenceException</code> at any interop boundary. <code>List.head []</code> still throws <code>ArgumentException</code> at runtime — partial functions exist in the F# standard library; the convention is <code>List.tryHead</code>, but the convention is opt-in. And there is an entire class of issue called <code>[&lt;CLIMutable&gt;]</code> that you can see in <code>Decision.fs</code> already:</p>
+<pre><code class="language-fsharp">[&lt;CLIMutable&gt;]
+type AcceptedTransaction =
+    { TransactionId: string
+      SourceRowNumber: int
+      Vehicle: Vehicle
+      OccurredAt: DateTimeOffset
+      ...
+      Mode: UploadMode }</code></pre>
+<p>That attribute tells the compiler to <em>also</em> emit a parameterless constructor and settable properties for the record, so C# callers and JSON deserializers can construct it. The F# code itself never mutates these values — but the type, at the CLR level, exposes a mutable shape. It is a deliberately carved hole in the safety guarantee, and it exists for one reason: F# rarely runs alone.</p>
+<p>That hole — the boundary between the gorgeous F# core and the C# world that has to consume it — is the next chapter.</p>
+<p><a href="06-fsharp-interop.html">Next chapter →</a></p>
+    </article>
+    <footer class="pager">
+      <a class="pager-prev" href="04-idiomatic-csharp.html">Previous: Idiomatic C#: same language, modern features on</a>
+      <a class="pager-next" href="06-fsharp-interop.html">Next: F# interop: where the domain meets C#</a>
+    </footer>
+  </main>
+</body>
+</html>

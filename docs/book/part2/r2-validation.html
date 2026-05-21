@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Validation and warnings - Blub &amp; Fuel</title>
+  <link rel="stylesheet" href="../book.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="book-title" href="../index.html">Blub &amp; Fuel</a>
+    <nav><ol><li><a href="../index.html">Blub &amp; Fuel</a></li><li><a href="../setup.html">Setup</a></li><li><a href="../part1/01-blub-paradox.html">The Blub Paradox</a></li><li><a href="../part1/02-normal-csharp-tour.html">Tour: the normal C# fuel engine</a></li><li><a href="../part1/03-seven-footguns.html">Seven footguns</a></li><li><a href="../part1/04-idiomatic-csharp.html">Idiomatic C#: same language, modern features on</a></li><li><a href="../part1/05-fsharp-native.html">F#: leaving C# behind</a></li><li><a href="../part1/06-fsharp-interop.html">F# interop: where the domain meets C#</a></li><li><a href="../part1/07-haskell-primer.html">A Haskell primer for C# developers</a></li><li><a href="../part1/08-haskell-safety.html">Haskell: making the bug unrepresentable</a></li><li><a href="../part1/09-rust-lands.html">Rust: a different goal, the same place</a></li><li><a href="../part1/10-the-punch.html">The punch: what each rung made impossible</a></li><li><a href="../part1b/11-boundary-returns.html">The boundary returns</a></li><li><a href="../part1b/12-boundary-side-by-side.html">Four engines at the boundary</a></li><li><a href="../part1b/13-final-takeaway.html">The final takeaway</a></li><li><a href="r1-decision.html">Modelling the row decision</a></li><li><a href="r2-validation.html" aria-current="page" class="active">Validation and warnings</a></li><li><a href="r3-recovery.html">Duplicate / recovery policy</a></li><li><a href="r4-boundary.html">The boundary</a></li><li><a href="r5-exhaustiveness.html">Exhaustiveness</a></li><li><a href="r6-mutability.html">Mutability and identity</a></li><li><a href="r7-null.html">Null and absence</a></li><li><a href="../references.html">references</a></li></ol></nav>
+  </aside>
+  <main>
+    <header class="page-header">
+      <p class="kicker">Static reader</p>
+      <h1>Validation and warnings</h1>
+      <p class="source-link">Generated from <a href="../../../book/part2/r2-validation.qmd">part2/r2-validation.qmd</a>.</p>
+    </header>
+    <article>
+      <h2 id="three-buckets">Three buckets</h2>
+<p>A row has three kinds of trouble it can be in, and they are not the same thing:</p>
+<ul><li><strong>Validation errors</strong> — structural problems. Quantity is negative, cost is missing, date is in the future. An accepted transaction may never carry a validation error.</li><li><strong>Warnings</strong> — the row is <em>legal</em> but unusual. Very high cost, very large quantity. Warnings do not block upload.</li><li><strong>Quarantine reasons</strong> — the row is structurally fine but <em>suspicious</em>. Merchant name contains &quot;TEST&quot;, quantity matches the configured fraud pattern. The row is held back for human review.</li></ul>
+<p>The three buckets must stay separate. A bug here — promoting a warning to a reject, or letting a validation error through into an accepted transaction — corrupts the audit story for the whole batch.</p>
+<h2 id="normal-c-throws-on-first-failure">Normal C# — throws on first failure</h2>
+<pre><code class="language-csharp">// normalcsharp-fuel-engine/src/FuelUploadEngine/Services/FuelRowValidator.cs
+public static void Validate(FuelRow row, ValidationConfig config)
+{
+    if (row.QuantityLiters &lt;= config.MinQuantityLiters)
+        throw new ValidationException(&quot;QuantityNotPositive&quot;);
+
+    if (row.QuantityLiters &gt; config.MaxQuantityLiters)
+        throw new ValidationException(&quot;QuantityExceedsMaximum&quot;);
+
+    if (row.TotalCost &lt;= 0m)
+        throw new ValidationException(&quot;CostNotPositive&quot;);
+
+    // ...four more `throw`s...
+}</code></pre>
+<p>The validator throws a <code>ValidationException</code> on the <strong>first</strong> failure. The caller catches it in a <code>try/catch</code> and turns it into a <code>Rejected</code> decision with the message string copied into <code>Errors</code>. Warnings and quarantine reasons are not in this file — they&#x27;re computed inline inside <code>FuelUploadService.BuildAcceptedDecision</code> as <code>if</code>-blocks that push strings onto the decision&#x27;s <code>List&lt;string&gt;</code> collections.</p>
+<p>What&#x27;s lost:</p>
+<ul><li>You only see <strong>one validation error at a time</strong>, even when the row has five.</li><li>The bucket is the place the code happens to live, not a property of the value. There is no <code>ValidationError</code> type — there are strings classified by which list they ended up in.</li><li>Exceptions for control flow. Stack traces have validation-error payloads in them.</li></ul>
+<h2 id="idiomatic-c-list-of-typed-errors">Idiomatic C# — list of typed errors</h2>
+<pre><code class="language-csharp">// csharp-fuel-engine/src/FuelUploadEngine/Engine/FuelRowValidator.cs
+public static IReadOnlyList&lt;ValidationError&gt; Validate(FuelRow row, ValidationConfig config)
+{
+    var errors = new List&lt;ValidationError&gt;();
+
+    if (string.IsNullOrWhiteSpace(row.VehicleIdentifier.Value))
+        errors.Add(new ValidationError(ValidationErrorCode.MissingVehicleIdentifier));
+    if (row.Quantity &lt;= 0)
+        errors.Add(new ValidationError(ValidationErrorCode.NonPositiveQuantity));
+    // ...
+    return errors;
+}</code></pre>
+<p><code>ValidationError</code> is a sealed record carrying a typed enum (<code>ValidationErrorCode</code>). <code>UploadWarning</code> and <code>QuarantineReason</code> are separate types with their own enum codes, computed in separate policies (<code>WarningPolicy</code>, <code>QuarantinePolicy</code>). The validator returns <strong>all</strong> errors, not just the first. Each bucket is its own type.</p>
+<p>No <code>NonEmpty</code> though — the empty list is a legal <code>IReadOnlyList</code>. The &quot;a rejected row must have at least one validation error&quot; invariant is encoded in the <code>RejectionReason.ValidationFailed</code> constructor at runtime, not at the type level.</p>
+<h2 id="f-list-pipelines-non-empty-quarantine-wrapper">F# — list pipelines, non-empty quarantine wrapper</h2>
+<pre><code class="language-fsharp">// fsharp-fuel-engine/FuelUpload.Domain/Validation.fs
+let validateRow (config: ValidationConfig) (row: ParsedFuelRow) =
+    [ if isBlank row.VehicleKey then
+          ValidationError.MissingVehicleKey
+      if isBlank row.MerchantName then
+          ValidationError.MissingMerchantName
+      if row.FuelVolumeGallons &lt; config.MinFuelVolumeGallons
+         || row.FuelVolumeGallons &gt; config.MaxFuelVolumeGallons then
+          ValidationError.InvalidFuelVolume(
+              row.FuelVolumeGallons,
+              config.MinFuelVolumeGallons,
+              config.MaxFuelVolumeGallons)
+      // ...
+    ]</code></pre>
+<p>F# list expressions are made for this. Each branch is a <code>if condition then value</code> that contributes to the list, no mutable accumulator needed. <code>ValidationError</code>, <code>Warning</code>, and <code>QuarantineReason</code> are all discriminated unions — the bucket and the payload are one type each.</p>
+<p>For quarantine, F# does have a non-empty wrapper:</p>
+<pre><code class="language-fsharp">type QuarantineReasons = private QuarantineReasons of QuarantineReason * QuarantineReason list
+
+module QuarantineReasons =
+    let create reasons =
+        match reasons with
+        | first :: rest -&gt; Some(QuarantineReasons(first, rest))
+        | [] -&gt; None</code></pre>
+<p>The private constructor is the whole point — you cannot make an empty <code>QuarantineReasons</code> from outside this module. <code>create</code> returns <code>Option</code>, forcing the caller to handle the empty case explicitly.</p>
+<h2 id="haskell-validationerror-and-nonempty-for-warnings">Haskell — <code>[ValidationError]</code> and <code>NonEmpty</code> for warnings</h2>
+<pre><code class="language-haskell">-- haskell-fuel-engine/src/FuelUpload/Validation.hs
+validationErrors :: ValidationConfig -&gt; ParsedFuelRow -&gt; [ValidationError]
+validationErrors config row =
+  quantityErrors &lt;&gt; amountErrors &lt;&gt; odometerErrors
+  where
+    quantity = parsedQuantity row
+    amount   = parsedAmount row
+    odometer = parsedOdometer row
+    quantityErrors =
+      positiveQuantityError quantity
+        &lt;&gt; maximumQuantityError (maximumQuantity config) quantity
+    -- ...
+
+positiveQuantityError :: FuelQuantity -&gt; [ValidationError]
+positiveQuantityError quantity@(FuelQuantity value)
+  | value &lt;= 0 = [QuantityMustBePositive quantity]
+  | otherwise  = []</code></pre>
+<p>Each rule is a function from input to <code>[ValidationError]</code> — empty if the rule passes, singleton if it fails. They compose with <code>&lt;&gt;</code>. The ValidationError type carries the actual offending value, not a string.</p>
+<p>The big move in Haskell is <code>NonEmpty</code>:</p>
+<pre><code class="language-haskell">data RejectionReason
+  = VehicleWasNotFound Registration
+  | RowFailedValidation (NonEmpty ValidationError)
+  | DuplicateCannotBeUploaded UploadMode DuplicateSkipReason
+
+data RowDecision
+  = -- ...
+  | AcceptedWithWarnings FuelTransaction (NonEmpty ValidationWarning)
+  | Quarantined FuelTransaction (NonEmpty QuarantineReason)</code></pre>
+<p><code>RowFailedValidation</code>, <code>AcceptedWithWarnings</code>, and <code>Quarantined</code> are all parameterised by <code>NonEmpty</code> — there is no representable state in which any of them carry zero items. The classifier code is forced to prove the list is non-empty (via <code>NonEmpty.nonEmpty :: [a] -&gt; Maybe (NonEmpty a)</code>) before it can construct the case. The invariant is <strong>at the type level</strong>, not at the constructor.</p>
+<h2 id="rust-vec-plus-a-newtype-guard-for-quarantine">Rust — <code>Vec</code> plus a newtype guard for quarantine</h2>
+<pre><code class="language-rust">// rust-fuel-engine/src/domain/validation.rs
+#[derive(Debug, Clone, PartialEq)]
+pub enum ValidationError {
+    QuantityNotFinite,
+    QuantityNotPositive { value: f64 },
+    CostNotFinite,
+    CostNegative { value: f64 },
+    // ...
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Warning {
+    MissingOdometer,
+    LargeQuantity { quantity_liters: f64, configured_limit: f64 },
+    HighUnitCost { unit_cost: f64, configured_limit: f64 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuarantineReasons(Vec&lt;QuarantineReason&gt;);
+
+impl QuarantineReasons {
+    pub fn new(reasons: Vec&lt;QuarantineReason&gt;) -&gt; Option&lt;Self&gt; {
+        if reasons.is_empty() { None } else { Some(Self(reasons)) }
+    }
+    pub fn as_slice(&amp;self) -&gt; &amp;[QuarantineReason] { &amp;self.0 }
+}</code></pre>
+<p>Validation errors and warnings are sum-type <code>enum</code>s with structured fields — same shape as F# DUs. Plain <code>Vec&lt;ValidationError&gt;</code> carries them around; &quot;non-empty&quot; is enforced inside <code>RejectionReason::ValidationFailed</code> implicitly by the classifier (if the list is empty, the row is not rejected).</p>
+<p>For quarantine, Rust uses the same trick F# does: a newtype <code>QuarantineReasons(Vec&lt;QuarantineReason&gt;)</code> with a private field. The only way in is <code>QuarantineReasons::new(...) -&gt; Option&lt;Self&gt;</code>, which returns <code>None</code> for the empty case. No empty <code>QuarantineReasons</code> can ever exist.</p>
+<h2 id="the-non-empty-story-lined-up">The non-empty story, lined up</h2>
+<div class="table-wrap"><table><thead><tr><th>Engine</th><th>Errors list</th><th>Warnings list</th><th>Quarantine reasons</th></tr></thead><tbody><tr><td>normal C#</td><td><code>List&lt;string&gt;</code>, no guard</td><td><code>List&lt;string&gt;</code>, no guard</td><td><code>List&lt;string&gt;</code>, no guard</td></tr><tr><td>idiomatic C#</td><td><code>IReadOnlyList&lt;ValidationError&gt;</code></td><td><code>IReadOnlyList&lt;UploadWarning&gt;</code></td><td><code>IReadOnlyList&lt;QuarantineReason&gt;</code> + runtime ctor check</td></tr><tr><td>F#</td><td><code>ValidationError list</code></td><td><code>Warning list</code></td><td><code>QuarantineReasons</code> (private DU, non-empty by construction)</td></tr><tr><td>Haskell</td><td><code>[ValidationError]</code> outside; <code>NonEmpty ValidationError</code> inside <code>Rejected</code></td><td><code>NonEmpty ValidationWarning</code> on <code>AcceptedWithWarnings</code></td><td><code>NonEmpty QuarantineReason</code> on <code>Quarantined</code></td></tr><tr><td>Rust</td><td><code>Vec&lt;ValidationError&gt;</code></td><td><code>Vec&lt;Warning&gt;</code></td><td><code>QuarantineReasons</code> (newtype, non-empty by construction)</td></tr></tbody></table></div>
+<p>The Haskell row wins for type-level expressiveness — <code>NonEmpty</code> flows all the way through and the type signatures alone prove the invariants. F# and Rust pay a small cost (one wrapper type) to get the quarantine invariant. C# pays it at runtime inside the constructor and gives up the warning/error invariants entirely. Normal C# pays it never — and every consumer pays it on their own time.</p>
+    </article>
+    <footer class="pager">
+      <a class="pager-prev" href="r1-decision.html">Previous: Modelling the row decision</a>
+      <a class="pager-next" href="r3-recovery.html">Next: Duplicate / recovery policy</a>
+    </footer>
+  </main>
+</body>
+</html>
