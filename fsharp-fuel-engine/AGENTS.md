@@ -3,7 +3,7 @@
 Language: F# / .NET 10.0  
 Build: `dotnet test FSharpFuelEngine.slnx`  
 Format: `dotnet format FSharpFuelEngine.slnx --verify-no-changes --verbosity minimal`  
-Tests: 20 NUnit tests  
+Tests: 20 xUnit tests + 4 FsCheck property tests  
 
 See `../CLAUDE.md` for the domain problem, shared rules, and cross-language vocabulary.
 
@@ -28,7 +28,8 @@ FuelUpload.Domain/
   Interop.fs        — DTO records, toDomainRequest, toResponseDto, FuelUploadFacade class
 
 FuelUpload.Domain.Tests/
-  Tests.fs          — NUnit tests
+  Tests.fs          — xUnit example-based tests
+  Properties.fs     — FsCheck property tests (mirrors haskell-fuel-engine/test/FuelUpload/Properties.hs)
 ```
 
 ---
@@ -144,4 +145,3 @@ Domain records (`AcceptedTransaction`, `QuarantinedRow`, etc.) also carry `[<CLI
 - `[<CLIMutable>]` on domain records allows C# to construct invalid domain values (null fields, wrong defaults).
 - DTO response uses `%A` (F# default formatting) for some domain values — not production-ready serialization.
 - Duplicate state does not carry the previous transaction key, making it less realistic for audit or idempotency scenarios.
-- No property tests.
