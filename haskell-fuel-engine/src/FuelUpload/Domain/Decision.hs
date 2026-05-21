@@ -2,6 +2,7 @@ module FuelUpload.Domain.Decision
   ( FuelTransaction (..)
   , ValidationError (..)
   , ValidationWarning (..)
+  , QuarantineReason (..)
   , RejectionReason (..)
   , DuplicateSkipReason (..)
   , RejectedRow (..)
@@ -44,6 +45,12 @@ data ValidationWarning
   | OdometerAboveWarningThreshold OdometerReading OdometerReading
   deriving stock (Eq, Show)
 
+data QuarantineReason
+  = SuspiciousMerchantName
+  | SuspiciousQuantityPattern
+  | SuspiciousCostPattern
+  deriving stock (Eq, Show)
+
 data RejectionReason
   = VehicleWasNotFound Registration
   | RowFailedValidation (NonEmpty ValidationError)
@@ -71,6 +78,7 @@ data SkippedDuplicate = SkippedDuplicateInfo
 data RowDecision
   = Accepted FuelTransaction
   | AcceptedWithWarnings FuelTransaction (NonEmpty ValidationWarning)
+  | Quarantined FuelTransaction (NonEmpty QuarantineReason)
   | SkippedDuplicate SkippedDuplicate
   | Rejected RejectedRow
   | Fatal FatalError
@@ -91,6 +99,7 @@ data BatchDecision = BatchDecision
 data BatchSummary = BatchSummary
   { summaryAccepted :: Int
   , summaryAcceptedWithWarnings :: Int
+  , summaryQuarantined :: Int
   , summarySkippedDuplicates :: Int
   , summaryRejected :: Int
   , summaryFatal :: Int

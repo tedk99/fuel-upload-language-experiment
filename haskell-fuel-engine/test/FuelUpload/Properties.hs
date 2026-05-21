@@ -23,6 +23,7 @@ propertySpec =
     prop "summary count partitions always add up to total" \(Decisions decisions) ->
       let summary = summarizeRows decisions
        in summaryAccepted summary
+            + summaryQuarantined summary
             + summarySkippedDuplicates summary
             + summaryRejected summary
             + summaryFatal summary
@@ -51,6 +52,7 @@ arbitraryDecision =
   oneof
     [ Accepted <$> arbitraryTransaction
     , AcceptedWithWarnings <$> arbitraryTransaction <*> arbitraryWarnings
+    , Quarantined <$> arbitraryTransaction <*> arbitraryQuarantineReasons
     , SkippedDuplicate <$> arbitrarySkippedDuplicate
     , Rejected <$> arbitraryRejectedRow
     , Fatal <$> arbitraryFatalError
@@ -80,6 +82,7 @@ acceptedRowGen = do
       { parsedQuantity = quantity
       , parsedAmount = amount
       , parsedOdometer = odometer
+      , parsedMerchantName = "Depot Fuel"
       }
 
 arbitraryFatalContext :: Gen RowContext
@@ -120,6 +123,7 @@ arbitraryValidRow = do
       , parsedQuantity = quantity
       , parsedAmount = amount
       , parsedOdometer = odometer
+      , parsedMerchantName = "Depot Fuel"
       }
 
 arbitraryTransaction :: Gen FuelTransaction
@@ -134,6 +138,11 @@ arbitraryWarnings =
           , OdometerAboveWarningThreshold (OdometerReading 200000) (OdometerReading 150000)
           ]
       )
+
+arbitraryQuarantineReasons :: Gen (NonEmpty QuarantineReason)
+arbitraryQuarantineReasons =
+  (SuspiciousMerchantName :|)
+    <$> listOf (elements [SuspiciousQuantityPattern, SuspiciousCostPattern])
 
 arbitrarySkippedDuplicate :: Gen SkippedDuplicate
 arbitrarySkippedDuplicate = do
@@ -169,6 +178,8 @@ defaultConfig =
     , highQuantityWarning = FuelQuantity 60
     , highAmountWarning = MoneyAmount 100
     , highOdometerWarning = OdometerReading 150000
+    , suspiciousQuantity = FuelQuantity 999
+    , suspiciousAmount = MoneyAmount 999
     }
 
 validRow :: ParsedFuelRow
@@ -180,6 +191,7 @@ validRow =
     , parsedQuantity = FuelQuantity 40
     , parsedAmount = MoneyAmount 80
     , parsedOdometer = OdometerReading 42000
+    , parsedMerchantName = "Depot Fuel"
     }
 
 validVehicle :: Vehicle

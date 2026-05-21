@@ -15,6 +15,7 @@ summarizeRows =
       BatchSummary
         { summaryAccepted = 0
         , summaryAcceptedWithWarnings = 0
+        , summaryQuarantined = 0
         , summarySkippedDuplicates = 0
         , summaryRejected = 0
         , summaryFatal = 0
@@ -27,6 +28,8 @@ summarizeRows =
           countAccepted summary
         AcceptedWithWarnings _ _ ->
           countAcceptedWithWarnings summary
+        Quarantined _ _ ->
+          countQuarantined summary
         SkippedDuplicate _ ->
           countSkipped summary
         Rejected _ ->
@@ -43,6 +46,11 @@ summarizeRows =
       bumpTotal summary
         { summaryAccepted = summaryAccepted summary + 1
         , summaryAcceptedWithWarnings = summaryAcceptedWithWarnings summary + 1
+        }
+
+    countQuarantined summary =
+      bumpTotal summary
+        { summaryQuarantined = summaryQuarantined summary + 1
         }
 
     countSkipped summary =
@@ -80,5 +88,6 @@ fatalErrors =
         Fatal fatalError -> fatalError : errors
         Accepted _ -> errors
         AcceptedWithWarnings _ _ -> errors
+        Quarantined _ _ -> errors
         SkippedDuplicate _ -> errors
         Rejected _ -> errors

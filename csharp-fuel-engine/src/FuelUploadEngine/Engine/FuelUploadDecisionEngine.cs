@@ -87,6 +87,12 @@ public static class FuelUploadDecisionEngine
     {
         var transaction = TransactionFactory.Create(row, vehicle, transactionKey);
         var warnings = WarningPolicy.WarningsFor(row, validationConfig);
+        var quarantineReasons = QuarantinePolicy.ReasonsFor(row, validationConfig);
+
+        if (quarantineReasons.Count > 0)
+        {
+            return new RowDecision.QuarantinedRow(row.RowNumber, transaction, quarantineReasons, warnings);
+        }
 
         return warnings.Count == 0
             ? new RowDecision.AcceptedTransaction(transaction)

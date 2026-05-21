@@ -33,6 +33,13 @@ public enum WarningCode
     UnitPriceAboveWarningThreshold
 }
 
+public enum QuarantineReasonCode
+{
+    SuspiciousMerchantName,
+    SuspiciousQuantityPattern,
+    SuspiciousCostPattern
+}
+
 public enum DuplicateSkipCode
 {
     DuplicateInNormalMode,

@@ -48,6 +48,8 @@ data ValidationConfig = ValidationConfig
   , highQuantityWarning :: FuelQuantity
   , highAmountWarning :: MoneyAmount
   , highOdometerWarning :: OdometerReading
+  , suspiciousQuantity :: FuelQuantity
+  , suspiciousAmount :: MoneyAmount
   }
   deriving stock (Eq, Show)
 

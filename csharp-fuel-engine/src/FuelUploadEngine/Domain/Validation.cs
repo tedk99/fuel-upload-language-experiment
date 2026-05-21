@@ -5,11 +5,15 @@ public sealed record ValidationConfig(
     decimal MaximumUnitPrice,
     decimal WarningQuantity,
     decimal WarningUnitPrice,
+    decimal SuspiciousQuantity,
+    decimal SuspiciousTotalCost,
     DateOnly Today);
 
 public sealed record ValidationError(ValidationErrorCode Code);
 
 public sealed record UploadWarning(WarningCode Code);
+
+public sealed record QuarantineReason(QuarantineReasonCode Code);
 
 public sealed record FatalError(FatalErrorCode Code, string Detail);
 

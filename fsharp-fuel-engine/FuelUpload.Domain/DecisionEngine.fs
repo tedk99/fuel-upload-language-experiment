@@ -27,10 +27,19 @@ module DecisionEngine =
 
     let private accepted config mode row vehicle =
         let transaction = toTransaction mode row vehicle
+        let warnings = Validation.warningsFor config row
 
-        match Validation.warningsFor config row with
-        | [] -> RowDecision.Accepted transaction
-        | warnings -> RowDecision.AcceptedWithWarnings(transaction, warnings)
+        match Validation.quarantineReasonsFor config row |> QuarantineReasons.create with
+        | Some reasons ->
+            RowDecision.Quarantined
+                { Transaction = transaction
+                  Reasons = reasons
+                  Warnings = warnings }
+        | None ->
+            match warnings with
+            | [] -> RowDecision.Accepted transaction
+            | warnings -> RowDecision.AcceptedWithWarnings(transaction, warnings)
+
 
     let classifyRow
         (config: ValidationConfig)

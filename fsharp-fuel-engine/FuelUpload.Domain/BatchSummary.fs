@@ -6,6 +6,7 @@ type BatchSummary =
       AcceptedRows: int
       AcceptedWithWarningRows: int
       WarningCount: int
+      QuarantinedRows: int
       SkippedDuplicateRows: int
       RejectedRows: int
       FatalErrorRows: int }
@@ -27,6 +28,10 @@ module BatchSummary =
                     AcceptedRows = summary.AcceptedRows + 1
                     AcceptedWithWarningRows = summary.AcceptedWithWarningRows + 1
                     WarningCount = summary.WarningCount + warnings.Length }
+            | RowDecision.Quarantined quarantined ->
+                { summary with
+                    QuarantinedRows = summary.QuarantinedRows + 1
+                    WarningCount = summary.WarningCount + quarantined.Warnings.Length }
             | RowDecision.SkippedDuplicate _ ->
                 { summary with
                     SkippedDuplicateRows = summary.SkippedDuplicateRows + 1 }
@@ -44,6 +49,7 @@ module BatchSummary =
               AcceptedRows = 0
               AcceptedWithWarningRows = 0
               WarningCount = 0
+              QuarantinedRows = 0
               SkippedDuplicateRows = 0
               RejectedRows = 0
               FatalErrorRows = 0 }

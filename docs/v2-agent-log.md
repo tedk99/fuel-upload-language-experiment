@@ -1,3 +1,4 @@
 | Phase | Agent | Commit | Languages touched | Tests run | Notes |
 |---|---|---|---|---|---|
 | Phase 1 | Replacement Phase 1 subagent | this commit | C#, F#, Haskell, Rust | `dotnet test csharp-fuel-engine/FuelUploadEngine.slnx`; `dotnet test fsharp-fuel-engine/FSharpFuelEngine.slnx`; `cabal test all`; `cargo test` | Completed the in-progress idiomatic project restructure for the four target languages. No toolchain failures. |
+| Phase 2 | Phase 2 subagent | this commit | C#, F#, Haskell, Rust | `dotnet test csharp-fuel-engine/FuelUploadEngine.slnx`; `dotnet test fsharp-fuel-engine/FSharpFuelEngine.slnx`; `cabal test all`; `cargo test` | Added typed quarantined row outcomes, deterministic quarantine policies, summary counts, and coverage for non-uploading/non-blocking quarantine behavior. No toolchain failures. |

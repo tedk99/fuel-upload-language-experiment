@@ -13,7 +13,9 @@ type ValidationConfig =
       ProcessingDate: DateTimeOffset
       HighFuelVolumeWarningGallons: decimal
       HighCostPerGallonWarning: decimal
-      StaleTransactionWarningDays: int }
+      StaleTransactionWarningDays: int
+      SuspiciousFuelVolumeGallons: decimal
+      SuspiciousTotalCost: decimal }
 
 [<RequireQualifiedAccess>]
 type ValidationError =
@@ -30,6 +32,22 @@ type Warning =
     | HighFuelVolume of actual: decimal * threshold: decimal
     | HighCostPerGallon of actual: decimal * threshold: decimal
     | StaleTransaction of ageDays: int * thresholdDays: int
+
+[<RequireQualifiedAccess>]
+type QuarantineReason =
+    | SuspiciousMerchantName
+    | SuspiciousQuantityPattern
+    | SuspiciousCostPattern
+
+type QuarantineReasons = private QuarantineReasons of QuarantineReason * QuarantineReason list
+
+module QuarantineReasons =
+    let create reasons =
+        match reasons with
+        | first :: rest -> Some(QuarantineReasons(first, rest))
+        | [] -> None
+
+    let toList (QuarantineReasons(first, rest)) = first :: rest
 
 [<RequireQualifiedAccess>]
 type VehicleRejectionReason =
@@ -59,7 +77,11 @@ module Validation =
           if config.HighCostPerGallonWarning < 0m then
               FatalProcessingError.InvalidValidationConfig "High cost per gallon warning threshold cannot be negative."
           if config.StaleTransactionWarningDays < 0 then
-              FatalProcessingError.InvalidValidationConfig "Stale transaction warning days cannot be negative." ]
+              FatalProcessingError.InvalidValidationConfig "Stale transaction warning days cannot be negative."
+          if config.SuspiciousFuelVolumeGallons < 0m then
+              FatalProcessingError.InvalidValidationConfig "Suspicious fuel volume cannot be negative."
+          if config.SuspiciousTotalCost < 0m then
+              FatalProcessingError.InvalidValidationConfig "Suspicious total cost cannot be negative." ]
 
     let validateRow (config: ValidationConfig) (row: ParsedFuelRow) =
         [ if isBlank row.VehicleKey then
@@ -95,3 +117,18 @@ module Validation =
 
           if age.TotalDays > float config.StaleTransactionWarningDays then
               Warning.StaleTransaction(int age.TotalDays, config.StaleTransactionWarningDays) ]
+
+    let quarantineReasonsFor (config: ValidationConfig) (row: ParsedFuelRow) =
+        [ let merchantName = row.MerchantName.Trim()
+          if
+              merchantName.Contains("test", StringComparison.OrdinalIgnoreCase)
+              || merchantName.Contains("unknown", StringComparison.OrdinalIgnoreCase)
+              || merchantName.Contains("manual", StringComparison.OrdinalIgnoreCase)
+          then
+              QuarantineReason.SuspiciousMerchantName
+
+          if row.FuelVolumeGallons = config.SuspiciousFuelVolumeGallons then
+              QuarantineReason.SuspiciousQuantityPattern
+
+          if row.TotalCost = config.SuspiciousTotalCost then
+              QuarantineReason.SuspiciousCostPattern ]

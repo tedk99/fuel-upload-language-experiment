@@ -1,8 +1,11 @@
 module FuelUpload.Validation
   ( validationErrors
   , validationWarnings
+  , quarantineReasons
   ) where
 
+import Data.Char (toLower)
+import Data.List (isInfixOf)
 import FuelUpload.Domain.Decision
 import FuelUpload.Domain.Primitive
 import FuelUpload.Domain.Row
@@ -31,6 +34,12 @@ validationWarnings config row =
   highQuantityWarningFor config (parsedQuantity row)
     <> highAmountWarningFor config (parsedAmount row)
     <> highOdometerWarningFor config (parsedOdometer row)
+
+quarantineReasons :: ValidationConfig -> ParsedFuelRow -> [QuarantineReason]
+quarantineReasons config row =
+  suspiciousMerchantName (parsedMerchantName row)
+    <> suspiciousQuantityPattern config (parsedQuantity row)
+    <> suspiciousAmountPattern config (parsedAmount row)
 
 positiveQuantityError :: FuelQuantity -> [ValidationError]
 positiveQuantityError quantity@(FuelQuantity value)
@@ -77,3 +86,22 @@ highOdometerWarningFor config odometer
       [OdometerAboveWarningThreshold odometer (highOdometerWarning config)]
   | otherwise =
       []
+
+suspiciousMerchantName :: String -> [QuarantineReason]
+suspiciousMerchantName merchantName
+  | any (`isInfixOf` lowered) ["test", "unknown", "manual"] =
+      [SuspiciousMerchantName]
+  | otherwise =
+      []
+  where
+    lowered = fmap toLower merchantName
+
+suspiciousQuantityPattern :: ValidationConfig -> FuelQuantity -> [QuarantineReason]
+suspiciousQuantityPattern config quantity
+  | quantity == suspiciousQuantity config = [SuspiciousQuantityPattern]
+  | otherwise = []
+
+suspiciousAmountPattern :: ValidationConfig -> MoneyAmount -> [QuarantineReason]
+suspiciousAmountPattern config amount
+  | amount == suspiciousAmount config = [SuspiciousCostPattern]
+  | otherwise = []

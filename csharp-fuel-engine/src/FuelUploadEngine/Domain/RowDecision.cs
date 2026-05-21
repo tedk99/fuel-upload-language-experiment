@@ -12,6 +12,34 @@ public abstract record RowDecision
         FuelTransaction Transaction,
         IReadOnlyList<UploadWarning> Warnings) : RowDecision;
 
+    public sealed record QuarantinedRow : RowDecision
+    {
+        public QuarantinedRow(
+            RowNumber rowNumber,
+            FuelTransaction transaction,
+            IReadOnlyList<QuarantineReason> reasons,
+            IReadOnlyList<UploadWarning> warnings)
+        {
+            if (reasons.Count == 0)
+            {
+                throw new ArgumentException("Quarantined rows require at least one reason.", nameof(reasons));
+            }
+
+            RowNumber = rowNumber;
+            Transaction = transaction;
+            Reasons = reasons;
+            Warnings = warnings;
+        }
+
+        public RowNumber RowNumber { get; }
+
+        public FuelTransaction Transaction { get; }
+
+        public IReadOnlyList<QuarantineReason> Reasons { get; }
+
+        public IReadOnlyList<UploadWarning> Warnings { get; }
+    }
+
     public sealed record SkippedDuplicate(
         RowNumber RowNumber,
         DuplicateState Duplicate,

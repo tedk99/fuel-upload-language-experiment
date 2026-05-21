@@ -20,19 +20,8 @@ classifyRow config mode context =
       Fatal fatalError
     (_, DuplicateCheckFatal fatalError) ->
       Fatal fatalError
-    (VehicleMissing registration, _) ->
-      reject (VehicleWasNotFound registration)
-    (VehicleFound vehicle, DuplicateCheckSucceeded duplicateState) ->
-      case duplicateDecision mode duplicateState of
-        UploadDuplicate ->
-          classifyValidated vehicle
-        SkipDuplicate reason ->
-          SkippedDuplicate SkippedDuplicateInfo
-            { skippedRow = row
-            , duplicateSkipReason = reason
-            }
-        RejectDuplicate reason ->
-          reject (DuplicateCannotBeUploaded mode reason)
+    _ ->
+      classifyValidated
   where
     row = contextRow context
 
@@ -42,18 +31,43 @@ classifyRow config mode context =
         , rejectionReason = reason
         }
 
-    classifyValidated vehicle =
+    classifyValidated =
       case validationErrors config row of
         firstError : remainingErrors ->
           reject (RowFailedValidation (firstError :| remainingErrors))
         [] ->
-          case validationWarnings config row of
-            firstWarning : remainingWarnings ->
-              AcceptedWithWarnings
-                (toTransaction row vehicle)
-                (firstWarning :| remainingWarnings)
+          case contextVehicleLookup context of
+            VehicleMissing registration ->
+              reject (VehicleWasNotFound registration)
+            VehicleFound vehicle ->
+              case contextDuplicateCheck context of
+                DuplicateCheckSucceeded duplicateState ->
+                  case duplicateDecision mode duplicateState of
+                    UploadDuplicate ->
+                      acceptedOrQuarantined vehicle
+                    SkipDuplicate reason ->
+                      SkippedDuplicate SkippedDuplicateInfo
+                        { skippedRow = row
+                        , duplicateSkipReason = reason
+                        }
+                    RejectDuplicate reason ->
+                      reject (DuplicateCannotBeUploaded mode reason)
+                DuplicateCheckFatal fatalError ->
+                  Fatal fatalError
+            VehicleLookupFatal fatalError ->
+              Fatal fatalError
+
+    acceptedOrQuarantined vehicle =
+      let transaction = toTransaction row vehicle
+       in case quarantineReasons config row of
+            firstReason : remainingReasons ->
+              Quarantined transaction (firstReason :| remainingReasons)
             [] ->
-              Accepted (toTransaction row vehicle)
+              case validationWarnings config row of
+                firstWarning : remainingWarnings ->
+                  AcceptedWithWarnings transaction (firstWarning :| remainingWarnings)
+                [] ->
+                  Accepted transaction
 
 classifyBatch :: ValidationConfig -> UploadMode -> [RowContext] -> BatchDecision
 classifyBatch config mode contexts =

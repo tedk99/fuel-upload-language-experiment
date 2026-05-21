@@ -2,7 +2,7 @@ use super::duplicate::DuplicateCheckResult;
 use super::duplicate::DuplicateState;
 use super::primitives::*;
 use super::row::ParsedFuelRow;
-use super::validation::{FatalError, RejectionReason, Warning};
+use super::validation::{FatalError, QuarantineReasons, RejectionReason, Warning};
 use super::vehicle::VehicleLookupResult;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -39,6 +39,11 @@ pub enum RowDecision {
         transaction: FuelTransaction,
         warnings: Vec<Warning>,
     },
+    Quarantined {
+        transaction: FuelTransaction,
+        reasons: QuarantineReasons,
+        warnings: Vec<Warning>,
+    },
     SkippedDuplicate(SkippedDuplicate),
     Rejected(RejectedRow),
     Fatal(FatalError),
@@ -56,6 +61,7 @@ pub struct Summary {
     pub total_rows: usize,
     pub accepted: usize,
     pub accepted_with_warnings: usize,
+    pub quarantined: usize,
     pub skipped_duplicates: usize,
     pub rejected: usize,
     pub fatal_errors: usize,
@@ -97,7 +103,8 @@ impl BatchDecision {
                 .filter_map(|decision| match decision {
                     RowDecision::Accepted(transaction)
                     | RowDecision::Warning { transaction, .. } => Some(transaction),
-                    RowDecision::SkippedDuplicate(_)
+                    RowDecision::Quarantined { .. }
+                    | RowDecision::SkippedDuplicate(_)
                     | RowDecision::Rejected(_)
                     | RowDecision::Fatal(_) => None,
                 })

@@ -11,5 +11,6 @@ data ParsedFuelRow = ParsedFuelRow
   , parsedQuantity :: FuelQuantity
   , parsedAmount :: MoneyAmount
   , parsedOdometer :: OdometerReading
+  , parsedMerchantName :: String
   }
   deriving stock (Eq, Show)

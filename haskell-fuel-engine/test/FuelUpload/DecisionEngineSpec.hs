@@ -28,7 +28,40 @@ main =
               , rejectionReason = RowFailedValidation (QuantityMustBePositive (FuelQuantity 0) :| [])
               }
 
+      it "quarantines a suspicious row with a typed reason" do
+        let row = validRow {parsedMerchantName = "Manual fuel entry"}
+            transaction = validTransactionFor row
+        classifyRow defaultConfig Normal (uniqueContext row)
+          `shouldBe` Quarantined transaction (SuspiciousMerchantName :| [])
+
+      it "rejects validation errors instead of quarantining" do
+        let row = validRow {parsedQuantity = FuelQuantity 0, parsedMerchantName = "manual review"}
+            decision = classifyRow defaultConfig Normal (uniqueContext row)
+        decision
+          `shouldBe` Rejected
+            RejectedRow
+              { rejectedRow = row
+              , rejectionReason = RowFailedValidation (QuantityMustBePositive (FuelQuantity 0) :| [])
+              }
+
       it "accepts rows with warnings because warnings do not block upload" do
+        let row =
+              validRow
+                { parsedQuantity = FuelQuantity 75
+                , parsedAmount = MoneyAmount 150
+                , parsedOdometer = OdometerReading 200000
+                }
+            transaction = validTransactionFor row
+        classifyRow defaultConfig Normal (uniqueContext row)
+          `shouldBe` AcceptedWithWarnings
+            transaction
+            ( QuantityAboveWarningThreshold (FuelQuantity 75) (FuelQuantity 60)
+                :| [ AmountAboveWarningThreshold (MoneyAmount 150) (MoneyAmount 100)
+                   , OdometerAboveWarningThreshold (OdometerReading 200000) (OdometerReading 150000)
+                   ]
+            )
+
+      it "does not turn warnings into quarantine" do
         let row =
               validRow
                 { parsedQuantity = FuelQuantity 75
@@ -90,6 +123,21 @@ main =
               , duplicateSkipReason = AlreadyFinalized (TransactionId "previous")
               }
 
+      it "skips Normal duplicates instead of quarantining" do
+        let row = validRow {parsedMerchantName = "test merchant"}
+            rowContext =
+              RowContext
+                { contextRow = row
+                , contextVehicleLookup = VehicleFound validVehicle
+                , contextDuplicateCheck = DuplicateCheckSucceeded (DuplicateOf finalizedAttempt)
+                }
+        classifyRow defaultConfig Normal rowContext
+          `shouldBe` SkippedDuplicate
+            SkippedDuplicateInfo
+              { skippedRow = row
+              , duplicateSkipReason = AlreadyFinalized (TransactionId "previous")
+              }
+
       it "skips Retry duplicates unless the previous attempt is explicitly retryable" do
         classifyRow defaultConfig Retry (duplicateContext notRetryableAttempt)
           `shouldBe` SkippedDuplicate
@@ -122,6 +170,7 @@ main =
         let warningRow = validRow {parsedRowNumber = RowNumber 2, parsedExternalRowId = ExternalRowId "row-2", parsedAmount = MoneyAmount 150}
             rejectedRow = validRow {parsedRowNumber = RowNumber 3, parsedExternalRowId = ExternalRowId "row-3", parsedQuantity = FuelQuantity 0}
             fatalError = DuplicateCheckUnavailable (RowNumber 4)
+            quarantinedRow = validRow {parsedRowNumber = RowNumber 5, parsedExternalRowId = ExternalRowId "row-5", parsedQuantity = FuelQuantity 33}
             fatalContext =
               RowContext
                 { contextRow = validRow {parsedRowNumber = RowNumber 4, parsedExternalRowId = ExternalRowId "row-4"}
@@ -136,18 +185,34 @@ main =
                 , uniqueContext warningRow
                 , duplicateContext finalizedAttempt
                 , uniqueContext rejectedRow
+                , uniqueContext quarantinedRow
                 , fatalContext
                 ]
         batchSummary batch
           `shouldBe` BatchSummary
             { summaryAccepted = 2
             , summaryAcceptedWithWarnings = 1
+            , summaryQuarantined = 1
             , summarySkippedDuplicates = 1
             , summaryRejected = 1
             , summaryFatal = 1
-            , summaryTotalRows = 5
+            , summaryTotalRows = 6
             }
         batchOutcome batch `shouldBe` BatchBlockedByFatal (fatalError :| [])
+
+      it "does not block a batch when a row is quarantined" do
+        let quarantinedRow = validRow {parsedRowNumber = RowNumber 2, parsedExternalRowId = ExternalRowId "row-2", parsedAmount = MoneyAmount 99}
+            batch = classifyBatch defaultConfig Normal [validUniqueContext, uniqueContext quarantinedRow]
+        batchOutcome batch `shouldBe` BatchUploadable
+        summaryAccepted (batchSummary batch) `shouldBe` 1
+        summaryQuarantined (batchSummary batch) `shouldBe` 1
+        batchRows batch
+          `shouldSatisfy` any
+            ( \decision ->
+                case decision of
+                  Quarantined _ reasons -> SuspiciousCostPattern `elem` reasons
+                  _ -> False
+            )
 
       it "does not block a batch when accepted rows only have warnings" do
         let warningRow = validRow {parsedAmount = MoneyAmount 150}
@@ -165,6 +230,8 @@ defaultConfig =
     , highQuantityWarning = FuelQuantity 60
     , highAmountWarning = MoneyAmount 100
     , highOdometerWarning = OdometerReading 150000
+    , suspiciousQuantity = FuelQuantity 33
+    , suspiciousAmount = MoneyAmount 99
     }
 
 validRow :: ParsedFuelRow
@@ -176,6 +243,7 @@ validRow =
     , parsedQuantity = FuelQuantity 40
     , parsedAmount = MoneyAmount 80
     , parsedOdometer = OdometerReading 42000
+    , parsedMerchantName = "Depot Fuel"
     }
 
 validVehicle :: Vehicle

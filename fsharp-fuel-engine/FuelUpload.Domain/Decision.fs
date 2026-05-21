@@ -27,10 +27,17 @@ type SkippedDuplicate =
       PreviousAttempt: PreviousAttemptState
       Reason: DuplicateSkipReason }
 
+[<CLIMutable>]
+type QuarantinedRow =
+    { Transaction: AcceptedTransaction
+      Reasons: QuarantineReasons
+      Warnings: Warning list }
+
 [<RequireQualifiedAccess>]
 type RowDecision =
     | Accepted of AcceptedTransaction
     | AcceptedWithWarnings of AcceptedTransaction * Warning list
+    | Quarantined of QuarantinedRow
     | SkippedDuplicate of SkippedDuplicate
     | Rejected of RejectedRow
     | Fatal of FatalProcessingError

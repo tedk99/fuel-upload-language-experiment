@@ -16,7 +16,9 @@ let config =
       ProcessingDate = processingDate
       HighFuelVolumeWarningGallons = 60m
       HighCostPerGallonWarning = 9m
-      StaleTransactionWarningDays = 45 }
+      StaleTransactionWarningDays = 45
+      SuspiciousFuelVolumeGallons = 33m
+      SuspiciousTotalCost = 99m }
 
 let row number =
     { RowNumber = number
@@ -199,6 +201,85 @@ let ``warnings are returned with accepted transactions and do not block upload``
     | other -> failwith $"Expected accepted row with warnings, got %A{other}"
 
 [<Fact>]
+let ``suspicious row is quarantined with typed reason`` () =
+    let suspiciousRow = { row 18 with MerchantName = "Manual fuel entry" }
+
+    let decision = classify UploadMode.Normal suspiciousRow matched noDuplicate
+
+    match decision with
+    | RowDecision.Quarantined quarantined ->
+        Assert.Equal(18, quarantined.Transaction.SourceRowNumber)
+        Assert.Contains(QuarantineReason.SuspiciousMerchantName, QuarantineReasons.toList quarantined.Reasons)
+    | other -> failwith $"Expected quarantined row, got %A{other}"
+
+[<Fact>]
+let ``validation error is rejected instead of quarantined`` () =
+    let invalidSuspiciousRow =
+        { row 19 with
+            MerchantName = "manual review"
+            FuelVolumeGallons = 0m }
+
+    let decision = classify UploadMode.Normal invalidSuspiciousRow matched noDuplicate
+
+    match decision with
+    | RowDecision.Rejected _ -> ()
+    | other -> failwith $"Expected rejected row, got %A{other}"
+
+[<Fact>]
+let ``normal duplicate is skipped instead of quarantined`` () =
+    let suspiciousRow = { row 20 with MerchantName = "test depot" }
+
+    let decision =
+        classify
+            UploadMode.Normal
+            suspiciousRow
+            matched
+            (DuplicateCheckResult.Duplicate PreviousAttemptState.Finalized)
+
+    match decision with
+    | RowDecision.SkippedDuplicate _ -> ()
+    | other -> failwith $"Expected duplicate skip, got %A{other}"
+
+[<Fact>]
+let ``warning does not become quarantine`` () =
+    let warningRow =
+        { row 21 with
+            FuelVolumeGallons = 70m
+            TotalCost = 700m }
+
+    let warningConfig = { config with MaxTotalCost = 1000m }
+    let decision = DecisionEngine.classifyRow warningConfig UploadMode.Normal warningRow matched noDuplicate
+
+    match decision with
+    | RowDecision.AcceptedWithWarnings _ -> ()
+    | other -> failwith $"Expected warning decision, got %A{other}"
+
+[<Fact>]
+let ``quarantined row does not upload or block and appears in summary`` () =
+    let quarantinedContext =
+        { Row = { row 23 with FuelVolumeGallons = 33m }
+          VehicleLookup = matched
+          DuplicateCheck = noDuplicate }
+
+    let batch =
+        DecisionEngine.classifyBatch
+            config
+            UploadMode.Normal
+            [ context 22 matched noDuplicate
+              quarantinedContext ]
+
+    match batch with
+    | BatchDecision.Ready(rows, summary) ->
+        Assert.Equal(2, rows.Length)
+        Assert.Equal(1, summary.AcceptedRows)
+        Assert.Equal(1, summary.QuarantinedRows)
+        Assert.True(rows |> List.exists (fun classified ->
+            match classified.Decision with
+            | RowDecision.Quarantined _ -> true
+            | _ -> false))
+    | other -> failwith $"Expected ready batch, got %A{other}"
+
+[<Fact>]
 let ``batch summary is derived from per row decisions`` () =
     let warningConfig = { config with MaxTotalCost = 1000m }
 
@@ -235,6 +316,7 @@ let ``batch summary is derived from per row decisions`` () =
         Assert.Equal(2, summary.AcceptedRows)
         Assert.Equal(1, summary.AcceptedWithWarningRows)
         Assert.Equal(2, summary.WarningCount)
+        Assert.Equal(0, summary.QuarantinedRows)
         Assert.Equal(1, summary.SkippedDuplicateRows)
         Assert.Equal(1, summary.RejectedRows)
         Assert.Equal(0, summary.FatalErrorRows)

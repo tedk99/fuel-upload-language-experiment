@@ -6,4 +6,5 @@ public sealed record FuelRow(
     DateOnly TransactionDate,
     decimal Quantity,
     decimal UnitPrice,
+    string MerchantName,
     ExternalReference ExternalReference);

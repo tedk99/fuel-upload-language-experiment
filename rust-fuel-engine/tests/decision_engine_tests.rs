@@ -122,6 +122,81 @@ fn warnings_do_not_block_accepted_transactions() {
 }
 
 #[test]
+fn quarantined_row_has_typed_reason() {
+    let mut row = valid_row();
+    row.merchant = Merchant::Known("Manual fuel entry".to_string());
+
+    let decision = classify_row(
+        &row_input(row, found_vehicle(), DuplicateCheckResult::Unique),
+        UploadMode::Normal,
+        &quiet_config(),
+    );
+
+    match decision {
+        RowDecision::Quarantined {
+            transaction,
+            reasons,
+            ..
+        } => {
+            assert_eq!(transaction.source_id, SourceRowId("row-1".to_string()));
+            assert!(
+                reasons
+                    .as_slice()
+                    .contains(&QuarantineReason::SuspiciousMerchantName)
+            );
+        }
+        _ => panic!("expected quarantined row"),
+    }
+}
+
+#[test]
+fn validation_error_is_rejected_not_quarantined() {
+    let mut row = valid_row();
+    row.quantity_liters = 0.0;
+    row.merchant = Merchant::Known("manual review".to_string());
+
+    let decision = classify_row(
+        &row_input(row, found_vehicle(), DuplicateCheckResult::Unique),
+        UploadMode::Normal,
+        &quiet_config(),
+    );
+
+    assert!(matches!(decision, RowDecision::Rejected(_)));
+}
+
+#[test]
+fn duplicate_normal_mode_is_skipped_not_quarantined() {
+    let mut row = valid_row();
+    row.merchant = Merchant::Known("test merchant".to_string());
+
+    let decision = classify_row(
+        &row_input(row, found_vehicle(), finalized_duplicate()),
+        UploadMode::Normal,
+        &quiet_config(),
+    );
+
+    assert!(matches!(decision, RowDecision::SkippedDuplicate(_)));
+}
+
+#[test]
+fn warning_does_not_become_quarantine() {
+    let config = ValidationConfig {
+        large_quantity_warning: WarningLimit::Above(10.0),
+        high_unit_cost_warning: WarningLimit::Above(1.0),
+        odometer_rule: OdometerRule::OptionalWarnWhenMissing,
+        ..quiet_config()
+    };
+
+    let decision = classify_row(
+        &row_input(valid_row(), found_vehicle(), DuplicateCheckResult::Unique),
+        UploadMode::Normal,
+        &config,
+    );
+
+    assert!(matches!(decision, RowDecision::Warning { .. }));
+}
+
+#[test]
 fn fatal_blocks_batch_and_suppresses_uploadable_transactions() {
     let good = row_input(valid_row(), found_vehicle(), DuplicateCheckResult::Unique);
     let fatal = row_input(
@@ -149,6 +224,41 @@ fn fatal_blocks_batch_and_suppresses_uploadable_transactions() {
         BatchDecision::Ready { .. } => panic!("fatal row must block the batch"),
     }
     assert!(decision.uploadable_transactions().is_empty());
+}
+
+#[test]
+fn quarantined_row_does_not_upload_or_block_and_appears_in_summary() {
+    let mut quarantined = row_with_number(2);
+    quarantined.quantity_liters = 33.0;
+
+    let config = ValidationConfig {
+        suspicious_quantity: 33.0,
+        ..quiet_config()
+    };
+    let decision = classify_batch(
+        &[
+            row_input(valid_row(), found_vehicle(), DuplicateCheckResult::Unique),
+            row_input(quarantined, found_vehicle(), DuplicateCheckResult::Unique),
+        ],
+        UploadMode::Normal,
+        &config,
+    );
+
+    match &decision {
+        BatchDecision::Ready { rows, summary } => {
+            assert_eq!(rows.len(), 2);
+            assert_eq!(summary.accepted, 1);
+            assert_eq!(summary.quarantined, 1);
+            assert!(
+                rows.iter()
+                    .any(|row| matches!(row, RowDecision::Quarantined { reasons, .. }
+                if reasons.as_slice().contains(&QuarantineReason::SuspiciousQuantityPattern)))
+            );
+        }
+        BatchDecision::Blocked { .. } => panic!("quarantined rows must not block the batch"),
+    }
+
+    assert_eq!(decision.uploadable_transactions().len(), 1);
 }
 
 #[test]
@@ -180,6 +290,7 @@ fn summary_is_derived_from_per_row_decisions() {
             total_rows: 4,
             accepted: 2,
             accepted_with_warnings: 1,
+            quarantined: 0,
             skipped_duplicates: 1,
             rejected: 1,
             fatal_errors: 0,

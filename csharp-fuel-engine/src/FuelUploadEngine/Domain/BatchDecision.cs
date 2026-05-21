@@ -15,6 +15,7 @@ public sealed record BatchSummary(
     int AcceptedTransactions,
     int AcceptedWithoutWarnings,
     int AcceptedWithWarnings,
+    int QuarantinedRows,
     int SkippedDuplicates,
     int RejectedRows,
     int FatalRows,

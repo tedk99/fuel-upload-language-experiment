@@ -30,6 +30,7 @@ pub fn classify_batch(
             RowDecision::Fatal(error) => Some(error.clone()),
             RowDecision::Accepted(_)
             | RowDecision::Warning { .. }
+            | RowDecision::Quarantined { .. }
             | RowDecision::SkippedDuplicate(_)
             | RowDecision::Rejected(_) => None,
         })
@@ -47,6 +48,14 @@ pub fn classify_batch(
 }
 
 pub fn classify_row(input: &RowInput, mode: UploadMode, config: &ValidationConfig) -> RowDecision {
+    if let VehicleLookupResult::Fatal(error) = &input.vehicle_lookup {
+        return RowDecision::Fatal(error.clone());
+    }
+
+    if let DuplicateCheckResult::Fatal(error) = &input.duplicate_check {
+        return RowDecision::Fatal(error.clone());
+    }
+
     let validation_errors = validate_row(&input.row, config);
     if !validation_errors.is_empty() {
         return RowDecision::Rejected(RejectedRow {
@@ -88,6 +97,15 @@ pub fn classify_row(input: &RowInput, mode: UploadMode, config: &ValidationConfi
 
     let transaction = build_transaction(&input.row, vehicle);
     let warnings = warnings_for(&input.row, transaction.unit_cost, config);
+    let quarantine_reasons = quarantine_reasons_for(&input.row, config);
+
+    if let Some(reasons) = QuarantineReasons::new(quarantine_reasons) {
+        return RowDecision::Quarantined {
+            transaction,
+            reasons,
+            warnings,
+        };
+    }
 
     if warnings.is_empty() {
         RowDecision::Accepted(transaction)
@@ -97,6 +115,27 @@ pub fn classify_row(input: &RowInput, mode: UploadMode, config: &ValidationConfi
             warnings,
         }
     }
+}
+
+fn quarantine_reasons_for(row: &ParsedFuelRow, config: &ValidationConfig) -> Vec<QuarantineReason> {
+    let mut reasons = Vec::new();
+
+    if let Merchant::Known(name) = &row.merchant {
+        let lowered = name.to_ascii_lowercase();
+        if lowered.contains("test") || lowered.contains("unknown") || lowered.contains("manual") {
+            reasons.push(QuarantineReason::SuspiciousMerchantName);
+        }
+    }
+
+    if row.quantity_liters == config.suspicious_quantity {
+        reasons.push(QuarantineReason::SuspiciousQuantityPattern);
+    }
+
+    if row.total_cost == config.suspicious_total_cost {
+        reasons.push(QuarantineReason::SuspiciousCostPattern);
+    }
+
+    reasons
 }
 
 fn validate_row(row: &ParsedFuelRow, config: &ValidationConfig) -> Vec<ValidationError> {

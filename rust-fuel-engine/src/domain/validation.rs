@@ -8,6 +8,8 @@ pub struct ValidationConfig {
     pub odometer_rule: OdometerRule,
     pub large_quantity_warning: WarningLimit<f64>,
     pub high_unit_cost_warning: WarningLimit<f64>,
+    pub suspicious_quantity: f64,
+    pub suspicious_total_cost: f64,
 }
 
 impl Default for ValidationConfig {
@@ -17,6 +19,8 @@ impl Default for ValidationConfig {
             odometer_rule: OdometerRule::OptionalWarnWhenMissing,
             large_quantity_warning: WarningLimit::Above(300.0),
             high_unit_cost_warning: WarningLimit::Above(10.0),
+            suspicious_quantity: 333_333.0,
+            suspicious_total_cost: 333_333.0,
         }
     }
 }
@@ -65,6 +69,30 @@ pub enum Warning {
         unit_cost: f64,
         configured_limit: f64,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuarantineReason {
+    SuspiciousMerchantName,
+    SuspiciousQuantityPattern,
+    SuspiciousCostPattern,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuarantineReasons(Vec<QuarantineReason>);
+
+impl QuarantineReasons {
+    pub fn new(reasons: Vec<QuarantineReason>) -> Option<Self> {
+        if reasons.is_empty() {
+            None
+        } else {
+            Some(Self(reasons))
+        }
+    }
+
+    pub fn as_slice(&self) -> &[QuarantineReason] {
+        &self.0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

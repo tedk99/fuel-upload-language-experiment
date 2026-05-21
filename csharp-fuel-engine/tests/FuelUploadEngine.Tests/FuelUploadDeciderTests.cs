@@ -7,6 +7,8 @@ public sealed class FuelUploadDeciderTests
         MaximumUnitPrice: 5.00m,
         WarningQuantity: 80m,
         WarningUnitPrice: 3.50m,
+        SuspiciousQuantity: 33m,
+        SuspiciousTotalCost: 99m,
         Today: new DateOnly(2026, 5, 21));
 
     private static readonly Vehicle KnownVehicle = new(new VehicleId("vehicle-1"), new VehicleIdentifier("REG-1"));
@@ -160,6 +162,71 @@ public sealed class FuelUploadDeciderTests
     }
 
     [Fact]
+    public void ClassifyRow_quarantines_suspicious_row_with_typed_reason()
+    {
+        var suspiciousRow = ValidRow(merchantName: "Manual fuel entry");
+
+        var decision = FuelUploadDecider.ClassifyRow(
+            suspiciousRow,
+            FoundVehicle(),
+            NotDuplicate("manual-key"),
+            StrictConfig,
+            UploadMode.Normal);
+
+        var quarantined = Assert.IsType<RowDecision.QuarantinedRow>(decision);
+        Assert.Equal(new TransactionKey("manual-key"), quarantined.Transaction.Key);
+        Assert.Contains(
+            quarantined.Reasons,
+            reason => reason.Code == QuarantineReasonCode.SuspiciousMerchantName);
+        Assert.NotEmpty(quarantined.Reasons);
+    }
+
+    [Fact]
+    public void ClassifyRow_validation_error_is_rejected_not_quarantined()
+    {
+        var invalidSuspiciousRow = ValidRow(quantity: 0m, merchantName: "manual review");
+
+        var decision = FuelUploadDecider.ClassifyRow(
+            invalidSuspiciousRow,
+            FoundVehicle(),
+            NotDuplicate("invalid-key"),
+            StrictConfig,
+            UploadMode.Normal);
+
+        Assert.IsType<RowDecision.RejectedRow>(decision);
+    }
+
+    [Fact]
+    public void ClassifyRow_duplicate_normal_mode_is_skipped_not_quarantined()
+    {
+        var suspiciousDuplicate = ValidRow(merchantName: "test merchant");
+
+        var decision = FuelUploadDecider.ClassifyRow(
+            suspiciousDuplicate,
+            FoundVehicle(),
+            Duplicate(new PreviousUploadOutcome.CanonicalFinalized()),
+            StrictConfig,
+            UploadMode.Normal);
+
+        Assert.IsType<RowDecision.SkippedDuplicate>(decision);
+    }
+
+    [Fact]
+    public void ClassifyRow_warning_does_not_become_quarantine()
+    {
+        var warningRow = ValidRow(quantity: 90m, unitPrice: 4m);
+
+        var decision = FuelUploadDecider.ClassifyRow(
+            warningRow,
+            FoundVehicle(),
+            NotDuplicate("warning-key"),
+            StrictConfig,
+            UploadMode.Normal);
+
+        Assert.IsType<RowDecision.AcceptedTransactionWithWarnings>(decision);
+    }
+
+    [Fact]
     public void ClassifyBatch_blocks_uploadable_transactions_when_any_row_is_fatal()
     {
         var request = new BatchClassificationRequest(
@@ -183,6 +250,28 @@ public sealed class FuelUploadDeciderTests
         Assert.Equal(1, decision.Summary.AcceptedTransactions);
         Assert.Equal(1, decision.Summary.FatalRows);
         Assert.Equal(0, decision.Summary.UploadableTransactions);
+    }
+
+    [Fact]
+    public void ClassifyBatch_quarantined_row_does_not_upload_or_block_and_appears_in_summary()
+    {
+        var request = new BatchClassificationRequest(
+            new[]
+            {
+                new BatchRowInput(ValidRow(rowNumber: 1), FoundVehicle(), NotDuplicate("accepted-key")),
+                new BatchRowInput(ValidRow(rowNumber: 2, quantity: 33m), FoundVehicle(), NotDuplicate("quarantined-key"))
+            },
+            StrictConfig,
+            UploadMode.Normal);
+
+        var decision = FuelUploadDecider.ClassifyBatch(request);
+
+        Assert.False(decision.HasFatalErrors);
+        Assert.Equal(2, decision.Summary.TotalRows);
+        Assert.Equal(1, decision.Summary.AcceptedTransactions);
+        Assert.Equal(1, decision.Summary.QuarantinedRows);
+        Assert.Equal(1, decision.Summary.UploadableTransactions);
+        Assert.Contains(decision.RowDecisions, row => row is RowDecision.QuarantinedRow);
     }
 
     [Fact]
@@ -211,6 +300,7 @@ public sealed class FuelUploadDeciderTests
         Assert.Equal(2, decision.Summary.AcceptedTransactions);
         Assert.Equal(1, decision.Summary.AcceptedWithoutWarnings);
         Assert.Equal(1, decision.Summary.AcceptedWithWarnings);
+        Assert.Equal(0, decision.Summary.QuarantinedRows);
         Assert.Equal(1, decision.Summary.SkippedDuplicates);
         Assert.Equal(1, decision.Summary.RejectedRows);
         Assert.Equal(1, decision.Summary.FatalRows);
@@ -239,7 +329,8 @@ public sealed class FuelUploadDeciderTests
     private static FuelRow ValidRow(
         int rowNumber = 1,
         decimal quantity = 13m,
-        decimal unitPrice = 3.50m)
+        decimal unitPrice = 3.50m,
+        string merchantName = "Depot Fuel")
     {
         return new FuelRow(
             new RowNumber(rowNumber),
@@ -247,6 +338,7 @@ public sealed class FuelUploadDeciderTests
             new DateOnly(2026, 5, 20),
             quantity,
             unitPrice,
+            merchantName,
             new ExternalReference($"line-{rowNumber}"));
     }
 

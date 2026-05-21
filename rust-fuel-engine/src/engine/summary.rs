@@ -17,6 +17,10 @@ impl Summary {
                         summary.accepted_with_warnings += 1;
                         summary.warnings += warnings.len();
                     }
+                    RowDecision::Quarantined { warnings, .. } => {
+                        summary.quarantined += 1;
+                        summary.warnings += warnings.len();
+                    }
                     RowDecision::SkippedDuplicate(_) => {
                         summary.skipped_duplicates += 1;
                     }
