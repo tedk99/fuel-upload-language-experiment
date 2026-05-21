@@ -1,6 +1,7 @@
 module Main (main) where
 
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.List (isInfixOf)
 import qualified FuelUpload.Api as Api
 import FuelUpload.Audit
 import FuelUpload.DecisionEngine
@@ -400,6 +401,55 @@ main =
         Api.responseAccepted response `shouldBe` 42
         Api.responseQuarantined response `shouldBe` 4
 
+      it "repository vehicle match leads to normal classification" do
+        case Api.classifyUploadDtoWithRepositories (vehicleRepository (Right (VehicleFound validVehicle))) (duplicateRepository (Right (DuplicateCheckSucceeded UniqueRow))) repositoryDtoRequest of
+          Right response -> do
+            fmap Api.decisionOutcome (Api.responseDecisions response) `shouldBe` ["accepted"]
+            fmap Api.decisionVehicleId (Api.responseDecisions response) `shouldBe` [Just "vehicle-1"]
+          Left errors -> expectationFailure ("Expected repository DTO to classify, got " <> show errors)
+
+      it "repository missing vehicle uses existing not-found behavior" do
+        case Api.classifyUploadDtoWithRepositories (vehicleRepository (Right (VehicleMissing (Registration "AB12 CDE")))) (duplicateRepository (Right (DuplicateCheckSucceeded UniqueRow))) repositoryDtoRequest of
+          Right response -> do
+            fmap Api.decisionOutcome (Api.responseDecisions response) `shouldBe` ["rejected"]
+            Api.decisionRejectionReason (head (Api.responseDecisions response)) `shouldSatisfy` maybe False (containsText "VehicleWasNotFound")
+          Left errors -> expectationFailure ("Expected repository DTO to classify, got " <> show errors)
+
+      it "repository duplicate state leads to skipped duplicate" do
+        case Api.classifyUploadDtoWithRepositories (vehicleRepository (Right (VehicleFound validVehicle))) (duplicateRepository (Right (DuplicateCheckSucceeded (DuplicateOf finalizedAttempt)))) repositoryDtoRequest of
+          Right response -> do
+            fmap Api.decisionOutcome (Api.responseDecisions response) `shouldBe` ["skipped_duplicate"]
+            Api.responseSkippedDuplicates response `shouldBe` 1
+          Left errors -> expectationFailure ("Expected repository DTO to classify, got " <> show errors)
+
+      it "repository failure is typed and not a validation error" do
+        let repositoryError = Api.VehicleRepositoryTimedOut "vehicle store timed out"
+        case Api.classifyUploadDtoWithRepositories (vehicleRepository (Left repositoryError)) (duplicateRepository (Right (DuplicateCheckSucceeded UniqueRow))) repositoryDtoRequest of
+          Right response -> do
+            repositoryError `shouldBe` Api.VehicleRepositoryTimedOut "vehicle store timed out"
+            fmap Api.decisionOutcome (Api.responseDecisions response) `shouldBe` ["fatal"]
+            Api.decisionFatalError (head (Api.responseDecisions response)) `shouldSatisfy` maybe False (containsText "VehicleLookupUnavailable")
+            Api.decisionRejectionReason (head (Api.responseDecisions response)) `shouldBe` Nothing
+          Left errors -> expectationFailure ("Expected repository DTO to classify, got " <> show errors)
+
+      it "quarantine still works with repository-backed service" do
+        let request = repositoryDtoRequest {Api.dtoRows = [repositoryDtoRow {Api.dtoMerchantName = "Manual fuel entry"}]}
+        case Api.classifyUploadDtoWithRepositories (vehicleRepository (Right (VehicleFound validVehicle))) (duplicateRepository (Right (DuplicateCheckSucceeded UniqueRow))) request of
+          Right response -> do
+            fmap Api.decisionOutcome (Api.responseDecisions response) `shouldBe` ["quarantined"]
+            Api.responseQuarantined response `shouldBe` 1
+          Left errors -> expectationFailure ("Expected repository DTO to classify, got " <> show errors)
+
+      it "repository-backed service summary matches the DTO summary" do
+        let repositoryResponse = Api.classifyUploadDtoWithRepositories (vehicleRepository (Right (VehicleFound validVehicle))) (duplicateRepository (Right (DuplicateCheckSucceeded UniqueRow))) repositoryDtoRequest
+            dtoResponse = Api.classifyUploadDto validDtoRequest
+        case (repositoryResponse, dtoResponse) of
+          (Right repository, Right dto) -> do
+            Api.responseTotalRows repository `shouldBe` Api.responseTotalRows dto
+            Api.responseAccepted repository `shouldBe` Api.responseAccepted dto
+            Api.responseQuarantined repository `shouldBe` Api.responseQuarantined dto
+          other -> expectationFailure ("Expected both DTO paths to classify, got " <> show other)
+
     describe "CSV-shaped import boundary" do
       it "valid imported row maps and classifies" do
         case Api.classifyImportBatch validImportRequest of
@@ -600,6 +650,10 @@ validDtoRequest =
     , Api.dtoRows = [validDtoRow]
     }
 
+repositoryDtoRequest :: Api.FuelUploadRequestDto
+repositoryDtoRequest =
+  validDtoRequest {Api.dtoRows = [repositoryDtoRow]}
+
 validImportRequest :: Api.ImportBatchRequest
 validImportRequest =
   Api.ImportBatchRequest
@@ -654,3 +708,25 @@ validDtoRow =
     , Api.dtoFinalizationState = ""
     , Api.dtoDuplicateError = ""
     }
+
+repositoryDtoRow :: Api.FuelUploadRowDto
+repositoryDtoRow =
+  validDtoRow
+    { Api.dtoVehicleLookupStatus = ""
+    , Api.dtoVehicleId = ""
+    , Api.dtoDuplicateStatus = ""
+    , Api.dtoPreviousTransactionId = ""
+    , Api.dtoCanonicalizationState = ""
+    , Api.dtoFinalizationState = ""
+    }
+
+vehicleRepository :: Either Api.VehicleRepositoryError VehicleLookupResult -> Api.VehicleRepository
+vehicleRepository result =
+  Api.VehicleRepository (\_ -> result)
+
+duplicateRepository :: Either Api.DuplicateRepositoryError DuplicateCheckResult -> Api.DuplicateRepository
+duplicateRepository result =
+  Api.DuplicateRepository (\_ -> result)
+
+containsText :: String -> String -> Bool
+containsText = isInfixOf

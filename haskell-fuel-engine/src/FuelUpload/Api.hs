@@ -10,10 +10,16 @@ module FuelUpload.Api
   , FuelImportErrorCode (..)
   , FuelImportError (..)
   , DomainUploadRequest (..)
+  , VehicleRepository (..)
+  , DuplicateRepository (..)
+  , RepositoryDuplicateLookup (..)
+  , VehicleRepositoryError (..)
+  , DuplicateRepositoryError (..)
   , toFuelUploadRequestDto
   , toDomainRequest
   , toResponseDto
   , classifyUploadDto
+  , classifyUploadDtoWithRepositories
   , classifyImportBatch
   ) where
 
@@ -157,6 +163,31 @@ data DomainUploadRequest = DomainUploadRequest
   }
   deriving stock (Eq, Show)
 
+newtype VehicleRepository = VehicleRepository
+  { repositoryLookupVehicle :: Registration -> Either VehicleRepositoryError VehicleLookupResult
+  }
+
+newtype DuplicateRepository = DuplicateRepository
+  { repositoryLookupDuplicate :: RepositoryDuplicateLookup -> Either DuplicateRepositoryError DuplicateCheckResult
+  }
+
+data RepositoryDuplicateLookup = RepositoryDuplicateLookup
+  { repositoryLookupRowNumber :: RowNumber
+  , repositoryLookupExternalRowId :: ExternalRowId
+  , repositoryLookupRegistration :: Registration
+  }
+  deriving stock (Eq, Show)
+
+data VehicleRepositoryError
+  = VehicleRepositoryUnavailable String
+  | VehicleRepositoryTimedOut String
+  deriving stock (Eq, Show)
+
+data DuplicateRepositoryError
+  = DuplicateRepositoryUnavailable String
+  | DuplicateRepositoryTimedOut String
+  deriving stock (Eq, Show)
+
 toDomainRequest :: FuelUploadRequestDto -> Either [FuelUploadMappingError] DomainUploadRequest
 toDomainRequest dto =
   case parseMode "uploadMode" (dtoUploadMode dto) of
@@ -189,6 +220,22 @@ toDomainRequest dto =
 classifyUploadDto :: FuelUploadRequestDto -> Either [FuelUploadMappingError] FuelUploadResponseDto
 classifyUploadDto dto = do
   request <- toDomainRequest dto
+  pure
+    ( toResponseDto
+        ( classifyBatch
+            (domainValidationConfig request)
+            (domainUploadMode request)
+            (domainRows request)
+        )
+    )
+
+classifyUploadDtoWithRepositories ::
+  VehicleRepository ->
+  DuplicateRepository ->
+  FuelUploadRequestDto ->
+  Either [FuelUploadMappingError] FuelUploadResponseDto
+classifyUploadDtoWithRepositories vehicleRepository duplicateRepository dto = do
+  request <- toRepositoryDomainRequest vehicleRepository duplicateRepository dto
   pure
     ( toResponseDto
         ( classifyBatch
@@ -259,6 +306,39 @@ toFuelUploadRequestDto request =
       | null (importRows request)
       ]
     rowErrors = missingRows <> concatMap errorsOfImport mappedRows
+    rows = [row | Right row <- mappedRows]
+
+toRepositoryDomainRequest ::
+  VehicleRepository ->
+  DuplicateRepository ->
+  FuelUploadRequestDto ->
+  Either [FuelUploadMappingError] DomainUploadRequest
+toRepositoryDomainRequest vehicleRepository duplicateRepository dto =
+  case parseMode "uploadMode" (dtoUploadMode dto) of
+    Left modeErrors ->
+      Left (modeErrors <> rowErrors)
+    Right mode
+      | null rowErrors ->
+          Right
+            DomainUploadRequest
+              { domainValidationConfig =
+                  ValidationConfig
+                    { maximumQuantity = FuelQuantity (dtoMaximumQuantity dto)
+                    , maximumAmount = MoneyAmount (dtoMaximumAmount dto)
+                    , highQuantityWarning = FuelQuantity (dtoHighQuantityWarning dto)
+                    , highAmountWarning = MoneyAmount (dtoHighAmountWarning dto)
+                    , highOdometerWarning = OdometerReading (dtoHighOdometerWarning dto)
+                    , suspiciousQuantity = FuelQuantity (dtoSuspiciousQuantity dto)
+                    , suspiciousAmount = MoneyAmount (dtoSuspiciousAmount dto)
+                    }
+              , domainUploadMode = mode
+              , domainRows = rows
+              }
+      | otherwise ->
+          Left rowErrors
+  where
+    mappedRows = fmap (uncurry (mapRepositoryRow vehicleRepository duplicateRepository)) (zip [0 :: Int ..] (dtoRows dto))
+    rowErrors = concatMap errorsOf mappedRows
     rows = [row | Right row <- mappedRows]
 
 toResponseDto :: BatchDecision -> FuelUploadResponseDto
@@ -362,6 +442,62 @@ mapRow index dto =
     registration = Registration <$> require (prefix <> ".registration") (dtoRegistration dto)
     vehicleLookup = parseVehicleLookup prefix dto
     duplicateCheck = parseDuplicateCheck prefix dto
+
+mapRepositoryRow ::
+  VehicleRepository ->
+  DuplicateRepository ->
+  Int ->
+  FuelUploadRowDto ->
+  Either [FuelUploadMappingError] RowContext
+mapRepositoryRow (VehicleRepository lookupVehicle) (DuplicateRepository lookupDuplicate) index dto =
+  case (rowNumber, externalRowId, registration) of
+    (Right number, Right externalId, Right registrationValue) ->
+      let parsedRow =
+            ParsedFuelRow
+              { parsedRowNumber = number
+              , parsedExternalRowId = externalId
+              , parsedRegistration = registrationValue
+              , parsedQuantity = FuelQuantity (dtoQuantity dto)
+              , parsedAmount = MoneyAmount (dtoAmount dto)
+              , parsedOdometer = OdometerReading (dtoOdometer dto)
+              , parsedMerchantName = dtoMerchantName dto
+              }
+          vehicleLookup =
+            either
+              (const (VehicleLookupFatal (VehicleLookupUnavailable number)))
+              id
+              (lookupVehicle registrationValue)
+          duplicateLookup =
+            case vehicleLookup of
+              VehicleLookupFatal _ -> DuplicateCheckSucceeded UniqueRow
+              _ ->
+                either
+                  (const (DuplicateCheckFatal (DuplicateCheckUnavailable number)))
+                  id
+                  ( lookupDuplicate
+                      RepositoryDuplicateLookup
+                        { repositoryLookupRowNumber = number
+                        , repositoryLookupExternalRowId = externalId
+                        , repositoryLookupRegistration = registrationValue
+                        }
+                  )
+       in Right
+            RowContext
+              { contextRow = parsedRow
+              , contextVehicleLookup = vehicleLookup
+              , contextDuplicateCheck = duplicateLookup
+              }
+    _ ->
+      Left
+        ( errorsOf rowNumber
+            <> errorsOf externalRowId
+            <> errorsOf registration
+        )
+  where
+    prefix = "rows[" <> show index <> "]"
+    rowNumber = parseRowNumber (prefix <> ".rowNumber") (dtoRowNumber dto)
+    externalRowId = ExternalRowId <$> require (prefix <> ".externalRowId") (dtoExternalRowId dto)
+    registration = Registration <$> require (prefix <> ".registration") (dtoRegistration dto)
 
 parseVehicleLookup :: String -> FuelUploadRowDto -> Either [FuelUploadMappingError] VehicleLookupResult
 parseVehicleLookup prefix dto =

@@ -160,6 +160,94 @@ impl FuelUploadApplicationService {
     }
 }
 
+pub trait VehicleRepository {
+    fn lookup(&self, reference: &VehicleRef)
+    -> Result<VehicleLookupResult, VehicleRepositoryError>;
+}
+
+pub trait DuplicateRepository {
+    fn lookup(
+        &self,
+        lookup: &DuplicateLookup,
+    ) -> Result<DuplicateCheckResult, DuplicateRepositoryError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DuplicateLookup {
+    pub row_number: RowNumber,
+    pub source_id: SourceRowId,
+    pub vehicle_ref: VehicleRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VehicleRepositoryError {
+    Unavailable { message: String },
+    TimedOut { message: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DuplicateRepositoryError {
+    Unavailable { message: String },
+    TimedOut { message: String },
+}
+
+pub struct RepositoryFuelUploadApplicationService<'a, V, D>
+where
+    V: VehicleRepository,
+    D: DuplicateRepository,
+{
+    vehicle_repository: &'a V,
+    duplicate_repository: &'a D,
+}
+
+impl<'a, V, D> RepositoryFuelUploadApplicationService<'a, V, D>
+where
+    V: VehicleRepository,
+    D: DuplicateRepository,
+{
+    pub fn new(vehicle_repository: &'a V, duplicate_repository: &'a D) -> Self {
+        Self {
+            vehicle_repository,
+            duplicate_repository,
+        }
+    }
+
+    pub fn classify(
+        &self,
+        request: &FuelUploadRequestDto,
+    ) -> Result<FuelUploadResponseDto, Vec<FuelUploadMappingError>> {
+        let resolved = FuelUploadRequestDto {
+            upload_mode: request.upload_mode.clone(),
+            validation: request.validation.clone(),
+            rows: request
+                .rows
+                .iter()
+                .map(|row| self.resolve_row(row))
+                .collect(),
+        };
+
+        FuelUploadApplicationService::classify(&resolved)
+    }
+
+    fn resolve_row(&self, row: &FuelUploadRowDto) -> FuelUploadRowDto {
+        let vehicle_ref = VehicleRef(row.vehicle_ref.trim().to_string());
+        let vehicle_lookup = self.vehicle_repository.lookup(&vehicle_ref);
+        let duplicate_lookup = match &vehicle_lookup {
+            Err(_) => Ok(DuplicateCheckResult::Unique),
+            Ok(_) => self.duplicate_repository.lookup(&DuplicateLookup {
+                row_number: RowNumber(row.row_number),
+                source_id: SourceRowId(row.source_id.trim().to_string()),
+                vehicle_ref,
+            }),
+        };
+
+        let mut resolved = row.clone();
+        apply_vehicle_lookup(&mut resolved, vehicle_lookup);
+        apply_duplicate_lookup(&mut resolved, duplicate_lookup);
+        resolved
+    }
+}
+
 pub struct FuelUploadImportMapper;
 
 impl FuelUploadImportMapper {
@@ -516,6 +604,135 @@ fn transaction_decision(
         rejection: None,
         duplicate_skip: None,
         fatal: None,
+    }
+}
+
+fn apply_vehicle_lookup(
+    row: &mut FuelUploadRowDto,
+    result: Result<VehicleLookupResult, VehicleRepositoryError>,
+) {
+    match result {
+        Ok(VehicleLookupResult::Found(vehicle)) => {
+            row.vehicle_lookup_status = "found".to_string();
+            row.vehicle_id = Some(vehicle.id.0);
+            row.ambiguous_vehicle_ids = Vec::new();
+            row.vehicle_lookup_error = None;
+        }
+        Ok(VehicleLookupResult::NotFound { .. }) => {
+            row.vehicle_lookup_status = "not_found".to_string();
+            row.vehicle_id = None;
+            row.ambiguous_vehicle_ids = Vec::new();
+            row.vehicle_lookup_error = None;
+        }
+        Ok(VehicleLookupResult::Ambiguous { matches, .. }) => {
+            row.vehicle_lookup_status = "ambiguous".to_string();
+            row.vehicle_id = None;
+            row.ambiguous_vehicle_ids = matches.into_iter().map(|id| id.0).collect();
+            row.vehicle_lookup_error = None;
+        }
+        Ok(VehicleLookupResult::Fatal(fatal)) => {
+            row.vehicle_lookup_status = "fatal".to_string();
+            row.vehicle_id = None;
+            row.ambiguous_vehicle_ids = Vec::new();
+            row.vehicle_lookup_error = Some(fatal.to_string());
+        }
+        Err(error) => {
+            row.vehicle_lookup_status = "fatal".to_string();
+            row.vehicle_id = None;
+            row.ambiguous_vehicle_ids = Vec::new();
+            row.vehicle_lookup_error = Some(vehicle_repository_error_message(&error).to_string());
+        }
+    }
+}
+
+fn apply_duplicate_lookup(
+    row: &mut FuelUploadRowDto,
+    result: Result<DuplicateCheckResult, DuplicateRepositoryError>,
+) {
+    match result {
+        Ok(DuplicateCheckResult::Unique) => {
+            row.duplicate_status = "unique".to_string();
+            row.duplicate_state = None;
+            row.transaction_id = None;
+            row.attempt_id = None;
+            row.duplicate_error = None;
+        }
+        Ok(DuplicateCheckResult::Duplicate(state)) => {
+            row.duplicate_status = "duplicate".to_string();
+            apply_duplicate_state(row, state);
+            row.duplicate_error = None;
+        }
+        Ok(DuplicateCheckResult::Fatal(fatal)) => {
+            row.duplicate_status = "fatal".to_string();
+            row.duplicate_state = None;
+            row.transaction_id = None;
+            row.attempt_id = None;
+            row.duplicate_error = Some(fatal.to_string());
+        }
+        Err(error) => {
+            row.duplicate_status = "fatal".to_string();
+            row.duplicate_state = None;
+            row.transaction_id = None;
+            row.attempt_id = None;
+            row.duplicate_error = Some(duplicate_repository_error_message(&error).to_string());
+        }
+    }
+}
+
+fn apply_duplicate_state(row: &mut FuelUploadRowDto, state: DuplicateState) {
+    match state {
+        DuplicateState::CanonicalFinalized { transaction_id } => {
+            row.duplicate_state = Some("canonical_finalized".to_string());
+            row.transaction_id = Some(transaction_id.0);
+            row.attempt_id = None;
+        }
+        DuplicateState::PreviousAttempt {
+            attempt_id,
+            retry,
+            finalization,
+            canonical_transaction,
+        } => {
+            row.attempt_id = Some(attempt_id.0);
+            row.transaction_id = match &canonical_transaction {
+                CanonicalTransactionKey::Present(transaction_id) => Some(transaction_id.0.clone()),
+                CanonicalTransactionKey::Missing => Some(format!("missing-key-{}", row.row_number)),
+            };
+            row.duplicate_state = Some(match (retry, finalization, canonical_transaction) {
+                (_, FinalizationState::FailedBeforeCanonicalFinalization, _) => {
+                    "failed_before_canonical_finalization".to_string()
+                }
+                (
+                    _,
+                    FinalizationState::FailedAfterCanonicalFinalization,
+                    CanonicalTransactionKey::Present(_),
+                ) => "failed_after_canonical_finalization_with_key".to_string(),
+                (
+                    _,
+                    FinalizationState::FailedAfterCanonicalFinalization,
+                    CanonicalTransactionKey::Missing,
+                ) => "failed_after_canonical_finalization_without_key".to_string(),
+                (RetryEligibility::ExplicitlyRetryable, FinalizationState::Unknown, _) => {
+                    "retryable_failure".to_string()
+                }
+                (RetryEligibility::NotRetryable, FinalizationState::Unknown, _) => {
+                    "not_retryable".to_string()
+                }
+            });
+        }
+    }
+}
+
+fn vehicle_repository_error_message(error: &VehicleRepositoryError) -> &str {
+    match error {
+        VehicleRepositoryError::Unavailable { message }
+        | VehicleRepositoryError::TimedOut { message } => message,
+    }
+}
+
+fn duplicate_repository_error_message(error: &DuplicateRepositoryError) -> &str {
+    match error {
+        DuplicateRepositoryError::Unavailable { message }
+        | DuplicateRepositoryError::TimedOut { message } => message,
     }
 }
 

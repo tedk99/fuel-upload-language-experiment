@@ -131,6 +131,38 @@ type FuelImportError =
       Field: string
       Detail: string }
 
+[<RequireQualifiedAccess>]
+type VehicleRepositoryErrorCode =
+    | Unavailable
+    | TimedOut
+
+[<CLIMutable>]
+type VehicleRepositoryError =
+    { Code: VehicleRepositoryErrorCode
+      Detail: string }
+
+[<RequireQualifiedAccess>]
+type DuplicateRepositoryErrorCode =
+    | Unavailable
+    | TimedOut
+
+[<CLIMutable>]
+type DuplicateRepositoryError =
+    { Code: DuplicateRepositoryErrorCode
+      Detail: string }
+
+[<CLIMutable>]
+type DuplicateRepositoryLookup =
+    { RowNumber: int
+      VehicleKey: string
+      ExternalReference: string }
+
+type IVehicleRepository =
+    abstract Lookup: vehicleKey: string -> Result<VehicleLookupResult, VehicleRepositoryError>
+
+type IDuplicateRepository =
+    abstract Lookup: lookup: DuplicateRepositoryLookup -> Result<DuplicateCheckResult, DuplicateRepositoryError>
+
 module FuelUploadInterop =
     let private normalize (value: string) =
         if isNull value then
@@ -499,6 +531,51 @@ module FuelUploadInterop =
                   DuplicateCheck = duplicateCheck }
         | _ -> Error(errorsOf occurredAt @ errorsOf vehicleLookup @ errorsOf duplicateCheck)
 
+    let private mapRepositoryRow
+        (vehicleRepository: IVehicleRepository)
+        (duplicateRepository: IDuplicateRepository)
+        index
+        (row: FuelUploadRowDto)
+        : Result<FuelRowContext, FuelUploadMappingError list> =
+        let prefix = $"rows[{index}]"
+        let occurredAt = parseDate $"{prefix}.occurredAt" row.OccurredAt
+        let vehicleKey = require $"{prefix}.vehicleKey" row.VehicleKey
+        let externalReference = require $"{prefix}.externalReference" row.ExternalReference
+
+        match occurredAt, vehicleKey, externalReference with
+        | Ok occurredAt, Ok vehicleKey, Ok externalReference ->
+            let vehicleLookup =
+                match vehicleRepository.Lookup vehicleKey with
+                | Ok lookup -> lookup
+                | Error error -> VehicleLookupResult.Fatal(FatalProcessingError.VehicleLookupUnavailable error.Detail)
+
+            let duplicateCheck =
+                match vehicleLookup with
+                | VehicleLookupResult.Fatal _ -> DuplicateCheckResult.NoDuplicate
+                | _ ->
+                    match
+                        duplicateRepository.Lookup
+                            { RowNumber = row.RowNumber
+                              VehicleKey = vehicleKey
+                              ExternalReference = externalReference }
+                    with
+                    | Ok lookup -> lookup
+                    | Error error -> DuplicateCheckResult.Fatal(FatalProcessingError.DuplicateCheckUnavailable error.Detail)
+
+            Ok
+                { Row =
+                    { RowNumber = row.RowNumber
+                      VehicleKey = vehicleKey
+                      OccurredAt = occurredAt
+                      OdometerMiles = row.OdometerMiles
+                      FuelVolumeGallons = row.FuelVolumeGallons
+                      TotalCost = row.TotalCost
+                      MerchantName = row.MerchantName
+                      ExternalReference = externalReference }
+                  VehicleLookup = vehicleLookup
+                  DuplicateCheck = duplicateCheck }
+        | _ -> Error(errorsOf occurredAt @ errorsOf vehicleKey @ errorsOf externalReference)
+
     let toDomainRequest (request: FuelUploadRequestDto) : Result<ValidationConfig * UploadMode * FuelRowContext list, FuelUploadMappingError list> =
         let mode = parseUploadMode "uploadMode" request.UploadMode
         let processingDate = parseDate "processingDate" request.ProcessingDate
@@ -512,6 +589,55 @@ module FuelUploadInterop =
                    : FuelUploadMappingError) ]
             else
                 request.Rows |> Array.mapi mapRow |> Array.toList, []
+
+        let rowErrors = rowResults |> List.collect errorsOf
+
+        match mode, processingDate, rowErrors, missingRowErrors with
+        | Ok mode, Ok processingDate, [], [] ->
+            let rows =
+                rowResults
+                |> List.choose (function
+                    | Ok row -> Some row
+                    | Error _ -> None)
+
+            Ok(
+                { RequireExternalReference = request.RequireExternalReference
+                  MinFuelVolumeGallons = request.MinFuelVolumeGallons
+                  MaxFuelVolumeGallons = request.MaxFuelVolumeGallons
+                  MinTotalCost = request.MinTotalCost
+                  MaxTotalCost = request.MaxTotalCost
+                  AllowFutureTransactions = request.AllowFutureTransactions
+                  ProcessingDate = processingDate
+                  HighFuelVolumeWarningGallons = request.HighFuelVolumeWarningGallons
+                  HighCostPerGallonWarning = request.HighCostPerGallonWarning
+                  StaleTransactionWarningDays = request.StaleTransactionWarningDays
+                  SuspiciousFuelVolumeGallons = request.SuspiciousFuelVolumeGallons
+                  SuspiciousTotalCost = request.SuspiciousTotalCost },
+                mode,
+                rows
+            )
+        | _ -> Error(errorsOf mode @ errorsOf processingDate @ rowErrors @ missingRowErrors)
+
+    let toRepositoryDomainRequest
+        (vehicleRepository: IVehicleRepository)
+        (duplicateRepository: IDuplicateRepository)
+        (request: FuelUploadRequestDto)
+        : Result<ValidationConfig * UploadMode * FuelRowContext list, FuelUploadMappingError list> =
+        let mode = parseUploadMode "uploadMode" request.UploadMode
+        let processingDate = parseDate "processingDate" request.ProcessingDate
+
+        let rowResults, missingRowErrors =
+            if isNull request.Rows then
+                [],
+                [ ({ Code = FuelUploadMappingErrorCode.MissingRequiredField
+                     Field = "rows"
+                     Detail = "Rows are required." }
+                   : FuelUploadMappingError) ]
+            else
+                request.Rows
+                |> Array.mapi (mapRepositoryRow vehicleRepository duplicateRepository)
+                |> Array.toList,
+                []
 
         let rowErrors = rowResults |> List.collect errorsOf
 
@@ -644,6 +770,16 @@ module FuelUploadInterop =
             |> DecisionEngine.classifyBatch config mode
             |> toResponseDto)
 
+    let classifyWithRepositories
+        (vehicleRepository: IVehicleRepository)
+        (duplicateRepository: IDuplicateRepository)
+        (request: FuelUploadRequestDto) =
+        toRepositoryDomainRequest vehicleRepository duplicateRepository request
+        |> Result.map (fun (config, mode, rows) ->
+            rows
+            |> DecisionEngine.classifyBatch config mode
+            |> toResponseDto)
+
     let private importErrorOfApplicationError (error: FuelUploadMappingError) : FuelImportError =
         let code =
             match error.Code with
@@ -665,3 +801,7 @@ module FuelUploadInterop =
 type FuelUploadFacade() =
     member _.Classify(request: FuelUploadRequestDto) = FuelUploadInterop.classify request
     member _.ClassifyImported(request: ImportBatchRequest) = FuelUploadInterop.classifyImported request
+
+type RepositoryFuelUploadFacade(vehicleRepository: IVehicleRepository, duplicateRepository: IDuplicateRepository) =
+    member _.Classify(request: FuelUploadRequestDto) =
+        FuelUploadInterop.classifyWithRepositories vehicleRepository duplicateRepository request

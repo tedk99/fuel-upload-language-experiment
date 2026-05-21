@@ -182,6 +182,131 @@ fn import_mapper_does_not_recompute_summary_independently() {
     assert_eq!(response.uploadable_transactions, 1);
 }
 
+#[test]
+fn repository_vehicle_match_leads_to_normal_classification() {
+    let response = repository_service(
+        Ok(VehicleLookupResult::Found(Vehicle {
+            id: VehicleId("vehicle-1".to_string()),
+            reference: VehicleRef("truck-1".to_string()),
+        })),
+        Ok(DuplicateCheckResult::Unique),
+    )
+    .classify(&repository_request())
+    .unwrap();
+
+    assert_eq!(response.decisions[0].outcome, "accepted");
+    assert_eq!(
+        response.decisions[0].transaction_vehicle_id,
+        Some("vehicle-1".to_string())
+    );
+}
+
+#[test]
+fn repository_missing_vehicle_uses_existing_not_found_behavior() {
+    let response = repository_service(
+        Ok(VehicleLookupResult::NotFound {
+            requested: VehicleRef("truck-1".to_string()),
+        }),
+        Ok(DuplicateCheckResult::Unique),
+    )
+    .classify(&repository_request())
+    .unwrap();
+
+    assert_eq!(response.decisions[0].outcome, "rejected");
+    assert!(
+        response.decisions[0]
+            .rejection
+            .as_ref()
+            .is_some_and(|reason| reason.contains("VehicleNotFound"))
+    );
+}
+
+#[test]
+fn repository_duplicate_state_leads_to_skipped_duplicate() {
+    let response = repository_service(
+        Ok(VehicleLookupResult::Found(Vehicle {
+            id: VehicleId("vehicle-1".to_string()),
+            reference: VehicleRef("truck-1".to_string()),
+        })),
+        Ok(DuplicateCheckResult::Duplicate(
+            DuplicateState::CanonicalFinalized {
+                transaction_id: TransactionId("existing".to_string()),
+            },
+        )),
+    )
+    .classify(&repository_request())
+    .unwrap();
+
+    assert_eq!(response.decisions[0].outcome, "skipped_duplicate");
+    assert_eq!(response.skipped_duplicates, 1);
+}
+
+#[test]
+fn repository_failure_is_typed_and_not_a_validation_error() {
+    let repository_error = VehicleRepositoryError::TimedOut {
+        message: "vehicle store timed out".to_string(),
+    };
+    let response = repository_service(
+        Err(repository_error.clone()),
+        Ok(DuplicateCheckResult::Unique),
+    )
+    .classify(&repository_request())
+    .unwrap();
+
+    assert_eq!(
+        repository_error,
+        VehicleRepositoryError::TimedOut {
+            message: "vehicle store timed out".to_string()
+        }
+    );
+    assert_eq!(response.decisions[0].outcome, "fatal");
+    assert!(response.decisions[0].fatal.is_some());
+    assert!(response.decisions[0].rejection.is_none());
+}
+
+#[test]
+fn quarantine_still_works_with_repository_backed_service() {
+    let mut request = repository_request();
+    request.rows[0].merchant = Some("Manual fuel entry".to_string());
+
+    let response = repository_service(
+        Ok(VehicleLookupResult::Found(Vehicle {
+            id: VehicleId("vehicle-1".to_string()),
+            reference: VehicleRef("truck-1".to_string()),
+        })),
+        Ok(DuplicateCheckResult::Unique),
+    )
+    .classify(&request)
+    .unwrap();
+
+    assert_eq!(response.decisions[0].outcome, "quarantined");
+    assert_eq!(response.quarantined, 1);
+}
+
+#[test]
+fn repository_backed_service_summary_matches_application_summary() {
+    let repository_response = repository_service(
+        Ok(VehicleLookupResult::Found(Vehicle {
+            id: VehicleId("vehicle-1".to_string()),
+            reference: VehicleRef("truck-1".to_string()),
+        })),
+        Ok(DuplicateCheckResult::Unique),
+    )
+    .classify(&repository_request())
+    .unwrap();
+    let application_response = FuelUploadApplicationService::classify(&valid_request()).unwrap();
+
+    assert_eq!(
+        repository_response.total_rows,
+        application_response.total_rows
+    );
+    assert_eq!(repository_response.accepted, application_response.accepted);
+    assert_eq!(
+        repository_response.uploadable_transactions,
+        application_response.uploadable_transactions
+    );
+}
+
 fn valid_request() -> FuelUploadRequestDto {
     FuelUploadRequestDto {
         upload_mode: "normal".to_string(),
@@ -195,6 +320,25 @@ fn valid_request() -> FuelUploadRequestDto {
         },
         rows: vec![valid_row(1)],
     }
+}
+
+fn repository_request() -> FuelUploadRequestDto {
+    let mut request = valid_request();
+    request.rows[0].vehicle_lookup_status = String::new();
+    request.rows[0].vehicle_id = None;
+    request.rows[0].duplicate_status = String::new();
+    request.rows[0].transaction_id = None;
+    request
+}
+
+fn repository_service(
+    vehicle_result: Result<VehicleLookupResult, VehicleRepositoryError>,
+    duplicate_result: Result<DuplicateCheckResult, DuplicateRepositoryError>,
+) -> RepositoryFuelUploadApplicationService<'static, FakeVehicleRepository, FakeDuplicateRepository>
+{
+    let vehicle_repository = Box::leak(Box::new(FakeVehicleRepository { vehicle_result }));
+    let duplicate_repository = Box::leak(Box::new(FakeDuplicateRepository { duplicate_result }));
+    RepositoryFuelUploadApplicationService::new(vehicle_repository, duplicate_repository)
 }
 
 fn valid_import_request() -> ImportBatchRequest {
@@ -253,5 +397,31 @@ fn valid_row(row_number: u32) -> FuelUploadRowDto {
         transaction_id: None,
         attempt_id: None,
         duplicate_error: None,
+    }
+}
+
+struct FakeVehicleRepository {
+    vehicle_result: Result<VehicleLookupResult, VehicleRepositoryError>,
+}
+
+impl VehicleRepository for FakeVehicleRepository {
+    fn lookup(
+        &self,
+        _reference: &VehicleRef,
+    ) -> Result<VehicleLookupResult, VehicleRepositoryError> {
+        self.vehicle_result.clone()
+    }
+}
+
+struct FakeDuplicateRepository {
+    duplicate_result: Result<DuplicateCheckResult, DuplicateRepositoryError>,
+}
+
+impl DuplicateRepository for FakeDuplicateRepository {
+    fn lookup(
+        &self,
+        _lookup: &DuplicateLookup,
+    ) -> Result<DuplicateCheckResult, DuplicateRepositoryError> {
+        self.duplicate_result.clone()
     }
 }

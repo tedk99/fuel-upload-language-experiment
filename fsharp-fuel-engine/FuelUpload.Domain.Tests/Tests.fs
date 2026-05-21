@@ -617,6 +617,119 @@ let ``response DTO uses domain summary without recomputing it`` () =
     Assert.Equal(6, response.QuarantinedRows)
     Assert.Equal(7, response.WarningCount)
 
+let repositoryDtoRow number : FuelUploadRowDto =
+    { validDtoRow number with
+        VehicleLookupStatus = ""
+        VehicleId = ""
+        DuplicateStatus = ""
+        PreviousAttempt = "" }
+
+let repositoryDtoRequest rows : FuelUploadRequestDto =
+    validDtoRequest rows
+
+let repositoryFacade
+    (vehicleResult: Result<VehicleLookupResult, VehicleRepositoryError>)
+    (duplicateResult: Result<DuplicateCheckResult, DuplicateRepositoryError>) =
+    let vehicleRepository =
+        { new IVehicleRepository with
+            member _.Lookup(_vehicleKey: string) = vehicleResult }
+
+    let duplicateRepository =
+        { new IDuplicateRepository with
+            member _.Lookup(_lookup: DuplicateRepositoryLookup) = duplicateResult }
+
+    RepositoryFuelUploadFacade(vehicleRepository, duplicateRepository)
+
+[<Fact>]
+let ``repository vehicle match leads to normal classification`` () =
+    let facade =
+        repositoryFacade
+            (Ok(VehicleLookupResult.Matched vehicle))
+            (Ok DuplicateCheckResult.NoDuplicate)
+
+    match facade.Classify(repositoryDtoRequest [| repositoryDtoRow 1 |]) with
+    | Ok response ->
+        Assert.Equal("accepted", response.Decisions[0].Outcome)
+        Assert.Equal("veh-1", response.Decisions[0].VehicleId)
+    | Error errors -> failwith $"Expected repository DTO to classify, got %A{errors}"
+
+[<Fact>]
+let ``repository missing vehicle uses existing not found behavior`` () =
+    let facade =
+        repositoryFacade
+            (Ok VehicleLookupResult.NotFound)
+            (Ok DuplicateCheckResult.NoDuplicate)
+
+    match facade.Classify(repositoryDtoRequest [| repositoryDtoRow 1 |]) with
+    | Ok response ->
+        Assert.Equal("rejected", response.Decisions[0].Outcome)
+        Assert.Contains(response.Decisions[0].RejectionReasons, fun reason -> reason.Contains("UnknownVehicle"))
+    | Error errors -> failwith $"Expected repository DTO to classify, got %A{errors}"
+
+[<Fact>]
+let ``repository duplicate state leads to skipped duplicate`` () =
+    let facade =
+        repositoryFacade
+            (Ok(VehicleLookupResult.Matched vehicle))
+            (Ok(DuplicateCheckResult.Duplicate PreviousAttemptState.Finalized))
+
+    match facade.Classify(repositoryDtoRequest [| repositoryDtoRow 1 |]) with
+    | Ok response ->
+        Assert.Equal("skipped_duplicate", response.Decisions[0].Outcome)
+        Assert.Equal(1, response.SkippedDuplicateRows)
+    | Error errors -> failwith $"Expected repository DTO to classify, got %A{errors}"
+
+[<Fact>]
+let ``repository failure is typed and not a validation error`` () =
+    let repositoryError: VehicleRepositoryError =
+        { Code = VehicleRepositoryErrorCode.TimedOut
+          Detail = "vehicle store timed out" }
+
+    let facade =
+        repositoryFacade
+            (Error repositoryError)
+            (Ok DuplicateCheckResult.NoDuplicate)
+
+    match facade.Classify(repositoryDtoRequest [| repositoryDtoRow 1 |]) with
+    | Ok response ->
+        Assert.Equal(VehicleRepositoryErrorCode.TimedOut, repositoryError.Code)
+        Assert.Equal("fatal", response.Decisions[0].Outcome)
+        Assert.Contains("VehicleLookupUnavailable", response.Decisions[0].FatalError)
+        Assert.Empty response.Decisions[0].RejectionReasons
+    | Error errors -> failwith $"Expected repository DTO to classify, got %A{errors}"
+
+[<Fact>]
+let ``quarantine still works with repository backed service`` () =
+    let facade =
+        repositoryFacade
+            (Ok(VehicleLookupResult.Matched vehicle))
+            (Ok DuplicateCheckResult.NoDuplicate)
+
+    let row = { repositoryDtoRow 1 with MerchantName = "Manual fuel entry" }
+
+    match facade.Classify(repositoryDtoRequest [| row |]) with
+    | Ok response ->
+        Assert.Equal("quarantined", response.Decisions[0].Outcome)
+        Assert.Equal(1, response.QuarantinedRows)
+    | Error errors -> failwith $"Expected repository DTO to classify, got %A{errors}"
+
+[<Fact>]
+let ``repository backed service summary matches facade summary`` () =
+    let facade =
+        repositoryFacade
+            (Ok(VehicleLookupResult.Matched vehicle))
+            (Ok DuplicateCheckResult.NoDuplicate)
+
+    let repositoryResponse = facade.Classify(repositoryDtoRequest [| repositoryDtoRow 1 |])
+    let dtoResponse = FuelUploadFacade().Classify(validDtoRequest [| validDtoRow 1 |])
+
+    match repositoryResponse, dtoResponse with
+    | Ok repository, Ok dto ->
+        Assert.Equal(dto.TotalRows, repository.TotalRows)
+        Assert.Equal(dto.AcceptedRows, repository.AcceptedRows)
+        Assert.Equal(dto.QuarantinedRows, repository.QuarantinedRows)
+    | other -> failwith $"Expected both DTO paths to classify, got %A{other}"
+
 let validImportedRow number : ImportedFuelRow =
     { RowNumber = string number
       VehicleKey = $"truck-{number}"
