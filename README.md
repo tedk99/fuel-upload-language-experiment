@@ -52,14 +52,21 @@ The shared rules:
 
 ## Projects
 
+Active V2 targets:
+
 | Language | Folder | Main Verification Command |
 |---|---|---|
 | C# | `csharp-fuel-engine` | `dotnet test` |
 | F# | `fsharp-fuel-engine` | `dotnet test` |
 | Haskell | `haskell-fuel-engine` | `cabal test all` |
 | Rust | `rust-fuel-engine` | `cargo fmt --check && cargo test && cargo clippy --all-targets -- -D warnings` |
-| TypeScript | `typescript-fuel-engine` | `npm run typecheck && npm test && npm run build` |
-| PureScript | `purescript-fuel-engine` | `spago test` |
+
+V1 baseline (frozen, not evolved in V2):
+
+| Language | Folder | Main Verification Command |
+|---|---|---|
+| TypeScript | `archived/typescript-fuel-engine` | `npm run typecheck && npm test && npm run build` |
+| PureScript | `archived/purescript-fuel-engine` | `spago test` |
 
 ## Verified Results
 
