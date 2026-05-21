@@ -1,6 +1,7 @@
 module Main (main) where
 
 import Data.List.NonEmpty (NonEmpty (..))
+import qualified FuelUpload.Api as Api
 import FuelUpload.DecisionEngine
 import FuelUpload.Domain.Decision
 import FuelUpload.Domain.Duplicate
@@ -240,6 +241,98 @@ main =
         batchOutcome batch `shouldBe` BatchUploadable
         summaryAcceptedWithWarnings (batchSummary batch) `shouldBe` 1
 
+    describe "DTO API boundary" do
+      it "maps and classifies a valid DTO request" do
+        Api.classifyUploadDto validDtoRequest
+          `shouldBe` Right
+            Api.FuelUploadResponseDto
+              { Api.responseDecisions =
+                  [ Api.FuelUploadDecisionDto
+                      { Api.decisionRowNumber = 1
+                      , Api.decisionOutcome = "accepted"
+                      , Api.decisionTransactionId = Just "row-1:vehicle-1"
+                      , Api.decisionVehicleId = Just "vehicle-1"
+                      , Api.decisionWarnings = []
+                      , Api.decisionQuarantineReasons = []
+                      , Api.decisionRejectionReason = Nothing
+                      , Api.decisionDuplicateSkipReason = Nothing
+                      , Api.decisionFatalError = Nothing
+                      }
+                  ]
+              , Api.responseAccepted = 1
+              , Api.responseAcceptedWithWarnings = 0
+              , Api.responseQuarantined = 0
+              , Api.responseSkippedDuplicates = 0
+              , Api.responseRejected = 0
+              , Api.responseFatal = 0
+              , Api.responseTotalRows = 1
+              , Api.responseBlocked = False
+              }
+
+      it "returns typed mapping errors for invalid DTOs" do
+        let request = validDtoRequest {Api.dtoUploadMode = "eventual"}
+        Api.toDomainRequest request
+          `shouldBe` Left
+            [ Api.FuelUploadMappingError
+                { Api.mappingErrorCode = Api.InvalidUploadMode
+                , Api.mappingErrorField = "uploadMode"
+                , Api.mappingErrorDetail = "Unsupported upload mode 'eventual'."
+                }
+            ]
+
+      it "represents accepted rejected skipped quarantined and fatal decisions" do
+        let rows =
+              [ validDtoRow
+              , validDtoRow {Api.dtoRowNumber = 2, Api.dtoExternalRowId = "row-2", Api.dtoAmount = 150}
+              , validDtoRow {Api.dtoRowNumber = 3, Api.dtoExternalRowId = "row-3", Api.dtoQuantity = 33}
+              , validDtoRow
+                  { Api.dtoRowNumber = 4
+                  , Api.dtoExternalRowId = "row-4"
+                  , Api.dtoDuplicateStatus = "duplicate"
+                  , Api.dtoPreviousTransactionId = "previous"
+                  , Api.dtoCanonicalizationState = "with_transaction_key"
+                  , Api.dtoFinalizationState = "finalized"
+                  }
+              , validDtoRow {Api.dtoRowNumber = 5, Api.dtoExternalRowId = "row-5", Api.dtoQuantity = 0}
+              , validDtoRow
+                  { Api.dtoRowNumber = 6
+                  , Api.dtoExternalRowId = "row-6"
+                  , Api.dtoDuplicateStatus = "fatal"
+                  }
+              ]
+            request = validDtoRequest {Api.dtoRows = rows}
+        case Api.classifyUploadDto request of
+          Right response -> do
+            let outcomes = fmap Api.decisionOutcome (Api.responseDecisions response)
+            outcomes `shouldContain` ["accepted"]
+            outcomes `shouldContain` ["accepted_with_warnings"]
+            outcomes `shouldContain` ["quarantined"]
+            outcomes `shouldContain` ["skipped_duplicate"]
+            outcomes `shouldContain` ["rejected"]
+            outcomes `shouldContain` ["fatal"]
+          Left errors -> expectationFailure ("Expected DTO to classify, got " <> show errors)
+
+      it "uses the domain batch summary without recomputing it" do
+        let decision =
+              BatchDecision
+                { batchRows = [Accepted validTransaction]
+                , batchSummary =
+                    BatchSummary
+                      { summaryAccepted = 42
+                      , summaryAcceptedWithWarnings = 5
+                      , summaryQuarantined = 4
+                      , summarySkippedDuplicates = 3
+                      , summaryRejected = 2
+                      , summaryFatal = 1
+                      , summaryTotalRows = 99
+                      }
+                , batchOutcome = BatchUploadable
+                }
+            response = Api.toResponseDto decision
+        Api.responseTotalRows response `shouldBe` 99
+        Api.responseAccepted response `shouldBe` 42
+        Api.responseQuarantined response `shouldBe` 4
+
     propertySpec
 
 defaultConfig :: ValidationConfig
@@ -350,4 +443,38 @@ preCanonicalAttempt =
     { previousTransactionId = TransactionId "previous"
     , previousCanonicalizationState = FailedBeforeCanonicalization
     , previousFinalizationState = FailedRetryable
+    }
+
+validDtoRequest :: Api.FuelUploadRequestDto
+validDtoRequest =
+  Api.FuelUploadRequestDto
+    { Api.dtoUploadMode = "normal"
+    , Api.dtoMaximumQuantity = 100
+    , Api.dtoMaximumAmount = 200
+    , Api.dtoHighQuantityWarning = 60
+    , Api.dtoHighAmountWarning = 100
+    , Api.dtoHighOdometerWarning = 150000
+    , Api.dtoSuspiciousQuantity = 33
+    , Api.dtoSuspiciousAmount = 99
+    , Api.dtoRows = [validDtoRow]
+    }
+
+validDtoRow :: Api.FuelUploadRowDto
+validDtoRow =
+  Api.FuelUploadRowDto
+    { Api.dtoRowNumber = 1
+    , Api.dtoExternalRowId = "row-1"
+    , Api.dtoRegistration = "AB12 CDE"
+    , Api.dtoQuantity = 40
+    , Api.dtoAmount = 80
+    , Api.dtoOdometer = 42000
+    , Api.dtoMerchantName = "Depot Fuel"
+    , Api.dtoVehicleLookupStatus = "found"
+    , Api.dtoVehicleId = "vehicle-1"
+    , Api.dtoVehicleLookupError = ""
+    , Api.dtoDuplicateStatus = "unique"
+    , Api.dtoPreviousTransactionId = ""
+    , Api.dtoCanonicalizationState = ""
+    , Api.dtoFinalizationState = ""
+    , Api.dtoDuplicateError = ""
     }

@@ -396,3 +396,122 @@ let ``fatal row blocks entire batch`` () =
         Assert.Equal(1, summary.FatalErrorRows)
         Assert.Equal<FatalProcessingError list>([ fatal ], fatalErrors)
     | other -> failwith $"Expected blocked batch, got %A{other}"
+
+let validDtoRow number =
+    { RowNumber = number
+      VehicleKey = $"truck-{number}"
+      OccurredAt = "2026-05-20T12:00:00+00:00"
+      OdometerMiles = 12000m + decimal number
+      FuelVolumeGallons = 20m
+      TotalCost = 70m
+      MerchantName = "Depot Fuel"
+      ExternalReference = $"ext-{number}"
+      VehicleLookupStatus = "matched"
+      VehicleId = "veh-1"
+      VehicleRegistration = "REG-1"
+      AmbiguousVehicleIds = [||]
+      VehicleLookupError = ""
+      DuplicateStatus = "no_duplicate"
+      PreviousAttempt = ""
+      DuplicateError = "" }
+
+let validDtoRequest rows =
+    { UploadMode = "normal"
+      RequireExternalReference = true
+      MinFuelVolumeGallons = 0.01m
+      MaxFuelVolumeGallons = 80m
+      MinTotalCost = 0.01m
+      MaxTotalCost = 500m
+      AllowFutureTransactions = false
+      ProcessingDate = "2026-05-21T12:00:00+00:00"
+      HighFuelVolumeWarningGallons = 60m
+      HighCostPerGallonWarning = 9m
+      StaleTransactionWarningDays = 45
+      SuspiciousFuelVolumeGallons = 33m
+      SuspiciousTotalCost = 99m
+      Rows = rows }
+
+[<Fact>]
+let ``valid DTO maps and classifies through facade`` () =
+    match FuelUploadFacade().Classify(validDtoRequest [| validDtoRow 1 |]) with
+    | Ok response ->
+        Assert.Equal(1, response.TotalRows)
+        Assert.Equal(1, response.AcceptedRows)
+        Assert.Equal("accepted", response.Decisions[0].Outcome)
+    | Error errors -> failwith $"Expected DTO to classify, got %A{errors}"
+
+[<Fact>]
+let ``invalid DTO produces typed mapping error`` () =
+    let request = { validDtoRequest [| validDtoRow 1 |] with UploadMode = "eventual" }
+
+    match FuelUploadInterop.toDomainRequest request with
+    | Error errors ->
+        Assert.Contains(
+            errors,
+            fun error ->
+                error.Code = FuelUploadMappingErrorCode.InvalidUploadMode
+                && error.Field = "uploadMode"
+        )
+    | Ok _ -> failwith "Expected invalid upload mode mapping error"
+
+[<Fact>]
+let ``response DTO represents all decision outcomes`` () =
+    let rows =
+        [| validDtoRow 1
+           { validDtoRow 2 with
+                FuelVolumeGallons = 70m }
+           { validDtoRow 3 with
+                FuelVolumeGallons = 33m }
+           { validDtoRow 4 with
+                DuplicateStatus = "duplicate"
+                PreviousAttempt = "finalized" }
+           { validDtoRow 5 with
+                MerchantName = "" }
+           { validDtoRow 6 with
+                DuplicateStatus = "fatal"
+                DuplicateError = "duplicate store timed out" } |]
+
+    match FuelUploadFacade().Classify(validDtoRequest rows) with
+    | Ok response ->
+        let outcomes = response.Decisions |> Array.map _.Outcome |> Set.ofArray
+        Assert.Contains("accepted", outcomes)
+        Assert.Contains("accepted_with_warnings", outcomes)
+        Assert.Contains("quarantined", outcomes)
+        Assert.Contains("skipped_duplicate", outcomes)
+        Assert.Contains("rejected", outcomes)
+        Assert.Contains("fatal", outcomes)
+    | Error errors -> failwith $"Expected DTO to classify, got %A{errors}"
+
+[<Fact>]
+let ``response DTO uses domain summary without recomputing it`` () =
+    let classified =
+        [ { Row = row 1
+            Decision =
+                RowDecision.Accepted
+                    { TransactionId = "txn-1"
+                      SourceRowNumber = 1
+                      Vehicle = vehicle
+                      OccurredAt = processingDate
+                      OdometerMiles = 10m
+                      FuelVolumeGallons = 10m
+                      TotalCost = 20m
+                      MerchantName = "Depot"
+                      ExternalReference = "ext-1"
+                      Mode = UploadMode.Normal } } ]
+
+    let summary =
+        { TotalRows = 99
+          AcceptedRows = 42
+          AcceptedWithWarningRows = 5
+          WarningCount = 7
+          QuarantinedRows = 6
+          SkippedDuplicateRows = 4
+          RejectedRows = 3
+          FatalErrorRows = 2 }
+
+    let response = FuelUploadInterop.toResponseDto (BatchDecision.Ready(classified, summary))
+
+    Assert.Equal(99, response.TotalRows)
+    Assert.Equal(42, response.AcceptedRows)
+    Assert.Equal(6, response.QuarantinedRows)
+    Assert.Equal(7, response.WarningCount)
