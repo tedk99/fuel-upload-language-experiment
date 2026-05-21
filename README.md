@@ -16,14 +16,18 @@ Source lives under [`book/`](book/). To refresh the static reader after editing 
 python3 tools/render_static_book.py
 ```
 
-To publish it on the Ubuntu/Docker host:
+To publish the Jupyter container and a public static copy of the book on the
+Ubuntu/Docker host:
 
 ```bash
-scripts/deploy_book_server.sh
+./okgo deploy
 ```
 
-That starts a public static reader on port `8898` and a local-only JupyterLab
-container on port `8899` for file browsing.
+That deploys the repo contents into the JupyterLab container, so any checked-in
+notebooks and source files are available there, and also starts a public static
+reader on port `8898` so everyone gets a browser-only copy of the book. Jupyter
+is bound to localhost on the server at port `8899`; use an SSH tunnel when you
+need it.
 
 If you do have Quarto installed, you can still use the richer Quarto preview/render flow:
 
