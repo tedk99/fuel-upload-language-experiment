@@ -397,7 +397,241 @@ let ``fatal row blocks entire batch`` () =
         Assert.Equal<FatalProcessingError list>([ fatal ], fatalErrors)
     | other -> failwith $"Expected blocked batch, got %A{other}"
 
-let validDtoRow number =
+[<Fact>]
+let ``accepted row projects accepted audit event`` () =
+    let batch = DecisionEngine.classifyBatch config UploadMode.Normal [ context 31 matched noDuplicate ]
+    let audit = AuditProjection.project batch
+
+    Assert.Single audit |> ignore
+    Assert.Equal(AuditEventKind.Accepted, audit[0].Kind)
+    Assert.Equal("accepted", (AuditProjection.toDto audit[0]).Status)
+
+[<Fact>]
+let ``warning row projects accepted with warnings audit event`` () =
+    let warningConfig = { config with MaxTotalCost = 1000m }
+
+    let warningContext =
+        { Row =
+            { row 32 with
+                FuelVolumeGallons = 70m
+                TotalCost = 700m }
+          VehicleLookup = matched
+          DuplicateCheck = noDuplicate }
+
+    let audit = DecisionEngine.classifyBatch warningConfig UploadMode.Normal [ warningContext ] |> AuditProjection.project
+
+    Assert.Equal(AuditEventKind.AcceptedWithWarnings, audit[0].Kind)
+    Assert.NotEmpty audit[0].Warnings
+    Assert.Empty audit[0].QuarantineReasons
+
+[<Fact>]
+let ``rejected row projects rejected audit event`` () =
+    let rejectedContext = { (context 33 matched noDuplicate) with Row = { row 33 with MerchantName = "" } }
+    let audit = DecisionEngine.classifyBatch config UploadMode.Normal [ rejectedContext ] |> AuditProjection.project
+
+    Assert.Equal(AuditEventKind.Rejected, audit[0].Kind)
+    Assert.NotEmpty audit[0].RejectionReasons
+
+[<Fact>]
+let ``skipped duplicate projects skipped audit event`` () =
+    let duplicateContext =
+        context 34 matched (DuplicateCheckResult.Duplicate PreviousAttemptState.Finalized)
+
+    let audit = DecisionEngine.classifyBatch config UploadMode.Normal [ duplicateContext ] |> AuditProjection.project
+
+    Assert.Equal(AuditEventKind.SkippedDuplicate, audit[0].Kind)
+    Assert.Equal(Some DuplicateSkipReason.NormalModeDuplicate, audit[0].DuplicateSkipReason)
+
+[<Fact>]
+let ``quarantined row projects quarantined audit event with reasons`` () =
+    let quarantinedContext =
+        { (context 35 matched noDuplicate) with
+            Row = { row 35 with MerchantName = "Manual fuel entry" } }
+    let audit = DecisionEngine.classifyBatch config UploadMode.Normal [ quarantinedContext ] |> AuditProjection.project
+
+    Assert.Equal(AuditEventKind.Quarantined, audit[0].Kind)
+    Assert.Contains(QuarantineReason.SuspiciousMerchantName, audit[0].QuarantineReasons)
+
+[<Fact>]
+let ``fatal batch projects fatal audit event`` () =
+    let fatal = FatalProcessingError.DuplicateCheckUnavailable "duplicate store timed out"
+    let audit =
+        DecisionEngine.classifyBatch
+            config
+            UploadMode.Normal
+            [ context 36 matched (DuplicateCheckResult.Fatal fatal) ]
+        |> AuditProjection.project
+
+    Assert.Equal(AuditEventKind.FatalBatch, audit[0].Kind)
+    Assert.Equal(Some fatal, audit[0].FatalError)
+    Assert.Equal("fatal_batch", (AuditProjection.toDto audit[0]).Status)
+
+[<Fact>]
+let ``audit projection does not recompute classification`` () =
+    let impossibleAccepted =
+        { Row = { row 37 with FuelVolumeGallons = 0m }
+          Decision =
+            RowDecision.Accepted
+                { TransactionId = "txn-impossible"
+                  SourceRowNumber = 37
+                  Vehicle = vehicle
+                  OccurredAt = processingDate
+                  OdometerMiles = 10m
+                  FuelVolumeGallons = 0m
+                  TotalCost = 20m
+                  MerchantName = "Depot"
+                  ExternalReference = "ext-impossible"
+                  Mode = UploadMode.Normal } }
+
+    let summary =
+        { TotalRows = 99
+          AcceptedRows = 0
+          AcceptedWithWarningRows = 0
+          WarningCount = 0
+          QuarantinedRows = 0
+          SkippedDuplicateRows = 0
+          RejectedRows = 99
+          FatalErrorRows = 0 }
+
+    let audit = AuditProjection.project (BatchDecision.Ready([ impossibleAccepted ], summary))
+
+    Assert.Equal(AuditEventKind.Accepted, audit[0].Kind)
+    Assert.Equal(Some "txn-impossible", audit[0].TransactionId)
+
+[<Fact>]
+let ``operational report includes decision derived row lists`` () =
+    let rows =
+        [ { Row = row 51
+            Decision =
+                RowDecision.Accepted
+                    { TransactionId = "txn-51"
+                      SourceRowNumber = 51
+                      Vehicle = vehicle
+                      OccurredAt = processingDate
+                      OdometerMiles = 10m
+                      FuelVolumeGallons = 10m
+                      TotalCost = 20m
+                      MerchantName = "Depot"
+                      ExternalReference = "ext-51"
+                      Mode = UploadMode.Normal } }
+          { Row = row 52
+            Decision =
+                RowDecision.AcceptedWithWarnings(
+                    { TransactionId = "txn-52"
+                      SourceRowNumber = 52
+                      Vehicle = vehicle
+                      OccurredAt = processingDate
+                      OdometerMiles = 10m
+                      FuelVolumeGallons = 70m
+                      TotalCost = 700m
+                      MerchantName = "Depot"
+                      ExternalReference = "ext-52"
+                      Mode = UploadMode.Normal },
+                    [ Warning.HighFuelVolume(70m, 60m) ]
+                ) }
+          { Row = row 53
+            Decision =
+                RowDecision.Rejected
+                    { Row = row 53
+                      Reasons = [ RejectionReason.ValidationFailed [ ValidationError.MissingMerchantName ] ] } }
+          { Row = row 54
+            Decision =
+                RowDecision.SkippedDuplicate
+                    { Row = row 54
+                      Mode = UploadMode.Normal
+                      PreviousAttempt = PreviousAttemptState.Finalized
+                      Reason = DuplicateSkipReason.NormalModeDuplicate } }
+          { Row = row 55
+            Decision =
+                RowDecision.Quarantined
+                    { Transaction =
+                        { TransactionId = "txn-quarantine"
+                          SourceRowNumber = 55
+                          Vehicle = vehicle
+                          OccurredAt = processingDate
+                          OdometerMiles = 10m
+                          FuelVolumeGallons = 33m
+                          TotalCost = 20m
+                          MerchantName = "Depot"
+                          ExternalReference = "ext-55"
+                          Mode = UploadMode.Normal }
+                      Reasons =
+                        QuarantineReasons.create [ QuarantineReason.SuspiciousQuantityPattern ]
+                        |> Option.get
+                      Warnings = [] } } ]
+    let summary = BatchSummary.summarize rows
+
+    let report = OperationalBatchReport.project (BatchDecision.Ready(rows, summary))
+
+    Assert.Equal(OperationalBatchStatus.Ready, report.Status)
+    Assert.Equal<string list>([ "txn-51"; "txn-52" ], report.UploadedTransactionIds)
+    Assert.Equal<int list>([ 53 ], report.RejectedRowNumbers)
+    Assert.Equal<int list>([ 54 ], report.SkippedDuplicateRowNumbers)
+    Assert.Equal(55, report.QuarantinedRows[0].RowNumber)
+    Assert.Equal<QuarantineReason list>(
+        [ QuarantineReason.SuspiciousQuantityPattern ],
+        report.QuarantinedRows[0].Reasons
+    )
+
+[<Fact>]
+let ``fatal operational report has fatal status and no uploaded transactions`` () =
+    let fatal = FatalProcessingError.DuplicateCheckUnavailable "duplicate store timed out"
+    let rows =
+        [ { Row = row 56
+            Decision =
+                RowDecision.Accepted
+                    { TransactionId = "txn-blocked"
+                      SourceRowNumber = 56
+                      Vehicle = vehicle
+                      OccurredAt = processingDate
+                      OdometerMiles = 10m
+                      FuelVolumeGallons = 10m
+                      TotalCost = 20m
+                      MerchantName = "Depot"
+                      ExternalReference = "ext-56"
+                      Mode = UploadMode.Normal } }
+          { Row = row 57
+            Decision = RowDecision.Fatal fatal } ]
+    let summary = BatchSummary.summarize rows
+
+    let report = OperationalBatchReport.project (BatchDecision.Blocked(rows, summary, [ fatal ]))
+
+    Assert.Equal(OperationalBatchStatus.Fatal, report.Status)
+    Assert.Empty report.UploadedTransactionIds
+    Assert.Equal<FatalProcessingError list>([ fatal ], report.FatalErrors)
+
+[<Fact>]
+let ``operational report uses existing summary and does not inspect raw input rows`` () =
+    let classified =
+        [ { Row = { row 58 with FuelVolumeGallons = 0m }
+            Decision =
+                RowDecision.Accepted
+                    { TransactionId = "txn-decision-only"
+                      SourceRowNumber = 58
+                      Vehicle = vehicle
+                      OccurredAt = processingDate
+                      OdometerMiles = 10m
+                      FuelVolumeGallons = 0m
+                      TotalCost = 20m
+                      MerchantName = "Depot"
+                      ExternalReference = "ext-58"
+                      Mode = UploadMode.Normal } } ]
+    let summary =
+        { TotalRows = 99
+          AcceptedRows = 42
+          AcceptedWithWarningRows = 5
+          WarningCount = 7
+          QuarantinedRows = 6
+          SkippedDuplicateRows = 4
+          RejectedRows = 3
+          FatalErrorRows = 0 }
+
+    let report = OperationalBatchReport.project (BatchDecision.Ready(classified, summary))
+
+    Assert.Equal(summary, report.Counts)
+    Assert.Equal<string list>([ "txn-decision-only" ], report.UploadedTransactionIds)
+
+let validDtoRow number : FuelUploadRowDto =
     { RowNumber = number
       VehicleKey = $"truck-{number}"
       OccurredAt = "2026-05-20T12:00:00+00:00"
@@ -415,7 +649,7 @@ let validDtoRow number =
       PreviousAttempt = ""
       DuplicateError = "" }
 
-let validDtoRequest rows =
+let validDtoRequest rows : FuelUploadRequestDto =
     { UploadMode = "normal"
       RequireExternalReference = true
       MinFuelVolumeGallons = 0.01m
@@ -515,3 +749,229 @@ let ``response DTO uses domain summary without recomputing it`` () =
     Assert.Equal(42, response.AcceptedRows)
     Assert.Equal(6, response.QuarantinedRows)
     Assert.Equal(7, response.WarningCount)
+
+let repositoryDtoRow number : FuelUploadRowDto =
+    { validDtoRow number with
+        VehicleLookupStatus = ""
+        VehicleId = ""
+        DuplicateStatus = ""
+        PreviousAttempt = "" }
+
+let repositoryDtoRequest rows : FuelUploadRequestDto =
+    validDtoRequest rows
+
+let repositoryFacade
+    (vehicleResult: Result<VehicleLookupResult, VehicleRepositoryError>)
+    (duplicateResult: Result<DuplicateCheckResult, DuplicateRepositoryError>) =
+    let vehicleRepository =
+        { new IVehicleRepository with
+            member _.Lookup(_vehicleKey: string) = vehicleResult }
+
+    let duplicateRepository =
+        { new IDuplicateRepository with
+            member _.Lookup(_lookup: DuplicateRepositoryLookup) = duplicateResult }
+
+    RepositoryFuelUploadFacade(vehicleRepository, duplicateRepository)
+
+[<Fact>]
+let ``repository vehicle match leads to normal classification`` () =
+    let facade =
+        repositoryFacade
+            (Ok(VehicleLookupResult.Matched vehicle))
+            (Ok DuplicateCheckResult.NoDuplicate)
+
+    match facade.Classify(repositoryDtoRequest [| repositoryDtoRow 1 |]) with
+    | Ok response ->
+        Assert.Equal("accepted", response.Decisions[0].Outcome)
+        Assert.Equal("veh-1", response.Decisions[0].VehicleId)
+    | Error errors -> failwith $"Expected repository DTO to classify, got %A{errors}"
+
+[<Fact>]
+let ``repository missing vehicle uses existing not found behavior`` () =
+    let facade =
+        repositoryFacade
+            (Ok VehicleLookupResult.NotFound)
+            (Ok DuplicateCheckResult.NoDuplicate)
+
+    match facade.Classify(repositoryDtoRequest [| repositoryDtoRow 1 |]) with
+    | Ok response ->
+        Assert.Equal("rejected", response.Decisions[0].Outcome)
+        Assert.Contains(response.Decisions[0].RejectionReasons, fun reason -> reason.Contains("UnknownVehicle"))
+    | Error errors -> failwith $"Expected repository DTO to classify, got %A{errors}"
+
+[<Fact>]
+let ``repository duplicate state leads to skipped duplicate`` () =
+    let facade =
+        repositoryFacade
+            (Ok(VehicleLookupResult.Matched vehicle))
+            (Ok(DuplicateCheckResult.Duplicate PreviousAttemptState.Finalized))
+
+    match facade.Classify(repositoryDtoRequest [| repositoryDtoRow 1 |]) with
+    | Ok response ->
+        Assert.Equal("skipped_duplicate", response.Decisions[0].Outcome)
+        Assert.Equal(1, response.SkippedDuplicateRows)
+    | Error errors -> failwith $"Expected repository DTO to classify, got %A{errors}"
+
+[<Fact>]
+let ``repository failure is typed and not a validation error`` () =
+    let repositoryError: VehicleRepositoryError =
+        { Code = VehicleRepositoryErrorCode.TimedOut
+          Detail = "vehicle store timed out" }
+
+    let facade =
+        repositoryFacade
+            (Error repositoryError)
+            (Ok DuplicateCheckResult.NoDuplicate)
+
+    match facade.Classify(repositoryDtoRequest [| repositoryDtoRow 1 |]) with
+    | Ok response ->
+        Assert.Equal(VehicleRepositoryErrorCode.TimedOut, repositoryError.Code)
+        Assert.Equal("fatal", response.Decisions[0].Outcome)
+        Assert.Contains("VehicleLookupUnavailable", response.Decisions[0].FatalError)
+        Assert.Empty response.Decisions[0].RejectionReasons
+    | Error errors -> failwith $"Expected repository DTO to classify, got %A{errors}"
+
+[<Fact>]
+let ``quarantine still works with repository backed service`` () =
+    let facade =
+        repositoryFacade
+            (Ok(VehicleLookupResult.Matched vehicle))
+            (Ok DuplicateCheckResult.NoDuplicate)
+
+    let row = { repositoryDtoRow 1 with MerchantName = "Manual fuel entry" }
+
+    match facade.Classify(repositoryDtoRequest [| row |]) with
+    | Ok response ->
+        Assert.Equal("quarantined", response.Decisions[0].Outcome)
+        Assert.Equal(1, response.QuarantinedRows)
+    | Error errors -> failwith $"Expected repository DTO to classify, got %A{errors}"
+
+[<Fact>]
+let ``repository backed service summary matches facade summary`` () =
+    let facade =
+        repositoryFacade
+            (Ok(VehicleLookupResult.Matched vehicle))
+            (Ok DuplicateCheckResult.NoDuplicate)
+
+    let repositoryResponse = facade.Classify(repositoryDtoRequest [| repositoryDtoRow 1 |])
+    let dtoResponse = FuelUploadFacade().Classify(validDtoRequest [| validDtoRow 1 |])
+
+    match repositoryResponse, dtoResponse with
+    | Ok repository, Ok dto ->
+        Assert.Equal(dto.TotalRows, repository.TotalRows)
+        Assert.Equal(dto.AcceptedRows, repository.AcceptedRows)
+        Assert.Equal(dto.QuarantinedRows, repository.QuarantinedRows)
+    | other -> failwith $"Expected both DTO paths to classify, got %A{other}"
+
+let validImportedRow number : ImportedFuelRow =
+    { RowNumber = string number
+      VehicleKey = $"truck-{number}"
+      OccurredAt = "2026-05-20T12:00:00+00:00"
+      OdometerMiles = string (12000 + number)
+      FuelVolumeGallons = "20"
+      TotalCost = "70"
+      MerchantName = "Depot Fuel"
+      ExternalReference = $"ext-{number}"
+      VehicleLookupStatus = "matched"
+      VehicleId = "veh-1"
+      VehicleRegistration = "REG-1"
+      AmbiguousVehicleIds = [||]
+      VehicleLookupError = ""
+      DuplicateStatus = "no_duplicate"
+      PreviousAttempt = ""
+      DuplicateError = "" }
+
+let validImportedRequest rows : ImportBatchRequest =
+    { UploadMode = "normal"
+      RequireExternalReference = "true"
+      MinFuelVolumeGallons = "0.01"
+      MaxFuelVolumeGallons = "80"
+      MinTotalCost = "0.01"
+      MaxTotalCost = "500"
+      AllowFutureTransactions = "false"
+      ProcessingDate = "2026-05-21T12:00:00+00:00"
+      HighFuelVolumeWarningGallons = "60"
+      HighCostPerGallonWarning = "9"
+      StaleTransactionWarningDays = "45"
+      SuspiciousFuelVolumeGallons = "33"
+      SuspiciousTotalCost = "99"
+      Rows = rows }
+
+[<Fact>]
+let ``valid imported row maps and classifies`` () =
+    match FuelUploadFacade().ClassifyImported(validImportedRequest [| validImportedRow 1 |]) with
+    | Ok response ->
+        Assert.Equal(1, response.TotalRows)
+        Assert.Equal(1, response.AcceptedRows)
+        Assert.Equal("accepted", response.Decisions[0].Outcome)
+    | Error errors -> failwith $"Expected imported row to classify, got %A{errors}"
+
+[<Fact>]
+let ``missing required imported cell returns typed import error`` () =
+    let request =
+        validImportedRequest
+            [| { validImportedRow 1 with
+                   VehicleKey = " " } |]
+
+    match FuelUploadInterop.toApplicationRequest request with
+    | Error errors ->
+        Assert.Contains(
+            errors,
+            fun error ->
+                error.Code = FuelImportErrorCode.MissingRequiredCell
+                && error.Field = "rows[0].vehicleKey"
+        )
+    | Ok _ -> failwith "Expected missing vehicle key import error"
+
+[<Fact>]
+let ``bad numeric imported value returns typed import error`` () =
+    let request =
+        validImportedRequest
+            [| { validImportedRow 1 with
+                   FuelVolumeGallons = "many" } |]
+
+    match FuelUploadInterop.toApplicationRequest request with
+    | Error errors ->
+        Assert.Contains(
+            errors,
+            fun error ->
+                error.Code = FuelImportErrorCode.InvalidNumber
+                && error.Field = "rows[0].fuelVolumeGallons"
+        )
+    | Ok _ -> failwith "Expected invalid numeric import error"
+
+[<Fact>]
+let ``unknown imported upload mode returns typed import error`` () =
+    let request = { validImportedRequest [| validImportedRow 1 |] with UploadMode = "eventual" }
+
+    match FuelUploadInterop.toApplicationRequest request with
+    | Error errors ->
+        Assert.Contains(
+            errors,
+            fun error ->
+                error.Code = FuelImportErrorCode.InvalidUploadMode
+                && error.Field = "uploadMode"
+        )
+    | Ok _ -> failwith "Expected invalid upload mode import error"
+
+[<Fact>]
+let ``quarantine still works through imported input`` () =
+    let request =
+        validImportedRequest
+            [| { validImportedRow 1 with
+                   MerchantName = "Manual fuel entry" } |]
+
+    match FuelUploadFacade().ClassifyImported request with
+    | Ok response ->
+        Assert.Equal(1, response.QuarantinedRows)
+        Assert.Equal("quarantined", response.Decisions[0].Outcome)
+    | Error errors -> failwith $"Expected imported row to classify, got %A{errors}"
+
+[<Fact>]
+let ``import mapper does not recompute summary independently`` () =
+    match FuelUploadFacade().ClassifyImported(validImportedRequest [| validImportedRow 1 |]) with
+    | Ok response ->
+        Assert.Equal(1, response.TotalRows)
+        Assert.Equal(1, response.AcceptedRows)
+        Assert.Equal(0, response.QuarantinedRows)
+    | Error errors -> failwith $"Expected imported row to classify, got %A{errors}"
