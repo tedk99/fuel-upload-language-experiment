@@ -60,6 +60,7 @@ format:
       theme: neutral
   epub:
     toc-depth: 3
+    mermaid-format: svg
     mermaid:
       theme: neutral
 
