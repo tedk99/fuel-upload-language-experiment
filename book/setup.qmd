@@ -14,7 +14,8 @@ Each implementation lives in a sibling directory:
 
 ```
 experiment-normalcsharp/
-├── normalcsharp-fuel-engine/   # the "junior C#" version (this book lives here)
+├── book/                       # this Quarto book lives here
+├── normalcsharp-fuel-engine/   # the "junior C#" version
 ├── csharp-fuel-engine/         # idiomatic C#
 ├── fsharp-fuel-engine/         # F#
 ├── haskell-fuel-engine/        # Haskell
@@ -42,7 +43,7 @@ Install pointers:
 The book is built with [Quarto](https://quarto.org). To re-render it:
 
 ```bash
-cd normalcsharp-fuel-engine/book
+cd book
 quarto render             # HTML (default) -> book/_build/
 quarto render --to epub   # EPUB -> book/_build/Blub-and-Fuel.epub
 quarto preview            # live-reload local server

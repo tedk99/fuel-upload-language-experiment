@@ -4,6 +4,33 @@ This repository compares how well different languages help an LLM produce correc
 
 The domain is a fuel upload row classifier. Each implementation is isolated in its own folder and does not integrate with any application, database, CSV parser, UI, or FleetSoft code.
 
+## The Book — *Blub & Fuel: Five Engines, One Domain*
+
+A 20-chapter Quarto teaching book that walks junior C# developers up the language ladder using these engines as the worked example. Source lives under [`book/`](book/); pre-rendered HTML and EPUB live in `book/_build/` after a render.
+
+To read or build the book:
+
+```bash
+# Read locally with live reload
+cd book
+quarto preview                   # opens http://localhost:port/ with sidebar + search
+
+# Or render once to static files
+quarto render                    # -> book/_build/index.html (HTML site)
+quarto render --to epub          # -> book/_build/Blub---Fuel--Five-Engines,-One-Domain.epub
+```
+
+Prerequisites:
+
+- [Quarto](https://quarto.org) 1.5 or newer.
+- For EPUB output with rendered diagrams: `quarto install chrome-headless-shell` (one-time; lets Quarto pre-render the mermaid diagrams to SVG so they appear as images in the EPUB rather than as source code).
+
+The book is structured in three parts:
+
+- **Part I — The Journey** (chapters 01–10): the V2 climb, from normal junior C# through idiomatic C#, F#, Haskell, and Rust.
+- **Part Ib — The Boundary Returns** (chapters 11–13): the V3 lesson — the bugs come back at integration edges (CSV, repositories, audit, reports) and how each language handles them.
+- **Part II — The Reference** (chapters r1–r7): topic-indexed side-by-side lookups (decision, validation, recovery, boundary, exhaustiveness, mutability, null).
+
 ## V2 Idiomatic Evolution Experiment
 
 V2 keeps the V1 implementations as the baseline, then tests how safely the strongest target languages evolve under change. Phase 0 scaffolding is captured in the [V2 experiment plan](docs/v2-experiment-plan.md), [V2 scoring rubric](docs/v2-scoring-rubric.md), and [V2 agent log](docs/v2-agent-log.md). Final target-language scoring is in the [V2 cross-language results](docs/v2-results.md), and the exact subagent prompts are captured in the [V2 prompt logs](prompts/v2/README.md).

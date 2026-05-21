@@ -8,3 +8,6 @@
 **/output/
 .DS_Store
 *.log
+
+/.quarto/
+**/*.quarto_ipynb
