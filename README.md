@@ -10,7 +10,7 @@ V2 keeps the V1 implementations as the baseline, then tests how safely the stron
 
 ## V3 Integration Pressure Experiment
 
-V3 builds on V2 by testing how the strongest target languages hold their domain boundaries under integration-shaped pressure. Phase 0 scaffolding is captured in the [V3 experiment plan](docs/v3-experiment-plan.md), [V3 scoring rubric](docs/v3-scoring-rubric.md), and [V3 agent log](docs/v3-agent-log.md).
+V3 builds on V2 by testing how the strongest target languages hold their domain boundaries under integration-shaped pressure. Phase 0 scaffolding is captured in the [V3 experiment plan](docs/v3-experiment-plan.md), [V3 scoring rubric](docs/v3-scoring-rubric.md), and [V3 agent log](docs/v3-agent-log.md). Final target-language scoring is in the [V3 cross-language results](docs/v3-results.md).
 
 ## Original Goal
 

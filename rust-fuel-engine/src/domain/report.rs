@@ -1,7 +1,7 @@
+use super::Summary;
 use super::decision::{BatchDecision, RowDecision};
 use super::primitives::{RowNumber, TransactionId};
 use super::validation::{FatalError, QuarantineReason};
-use super::Summary;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperationalBatchStatus {
@@ -39,8 +39,7 @@ pub fn project_operational_report(decision: &BatchDecision) -> OperationalBatchR
             .rows()
             .iter()
             .filter_map(|row| match row {
-                RowDecision::Accepted(transaction)
-                | RowDecision::Warning { transaction, .. } => {
+                RowDecision::Accepted(transaction) | RowDecision::Warning { transaction, .. } => {
                     Some(transaction.transaction_id.clone())
                 }
                 RowDecision::Quarantined { .. }

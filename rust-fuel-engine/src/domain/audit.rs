@@ -82,9 +82,12 @@ pub fn audit_status(kind: AuditEventKind) -> &'static str {
 
 fn project_row(decision: &RowDecision) -> AuditRecord {
     match decision {
-        RowDecision::Accepted(transaction) => {
-            transaction_record(AuditEventKind::Accepted, transaction, Vec::new(), Vec::new())
-        }
+        RowDecision::Accepted(transaction) => transaction_record(
+            AuditEventKind::Accepted,
+            transaction,
+            Vec::new(),
+            Vec::new(),
+        ),
         RowDecision::Warning {
             transaction,
             warnings,
