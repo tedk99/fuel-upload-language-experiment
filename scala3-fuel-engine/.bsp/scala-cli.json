@@ -1,0 +1,20 @@
+{
+  "name": "scala-cli",
+  "argv": [
+    "/home/ted/.local/bin/.scala-cli.aux",
+    "bsp",
+    "--json-options",
+    "/home/ted/Develop/experiment/scala3-fuel-engine/.scala-build/ide-options-v2.json",
+    "--json-launcher-options",
+    "/home/ted/Develop/experiment/scala3-fuel-engine/.scala-build/ide-launcher-options.json",
+    "--envs-file",
+    "/home/ted/Develop/experiment/scala3-fuel-engine/.scala-build/ide-envs.json",
+    "/home/ted/Develop/experiment/scala3-fuel-engine"
+  ],
+  "version": "1.14.0",
+  "bspVersion": "2.1.1",
+  "languages": [
+    "scala",
+    "java"
+  ]
+}

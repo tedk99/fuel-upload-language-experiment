@@ -1,0 +1,8 @@
+{
+  "version": "12.3.0",
+  "bsc_path": "/home/ted/.local/lib/node_modules/rescript/node_modules/@rescript/linux-x64/bin/bsc.exe",
+  "bsc_hash": "75e3a59c95cc953608fd3dd6ea6ed68141bba4414a20a52f114261b8a48385fa",
+  "rescript_config_hash": "9d36b2572ae5598b8886f5bdc91e3b38f371576ab66cc3ea8f58577380001f62",
+  "runtime_path": "/home/ted/.local/lib/node_modules/rescript/node_modules/@rescript/runtime",
+  "generated_at": "1779359626548"
+}

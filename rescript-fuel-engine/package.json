@@ -1,0 +1,14 @@
+{
+  "name": "rescript-fuel-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "build": "rescript build",
+    "clean": "rescript clean",
+    "test": "node test/Test.bs.js"
+  },
+  "devDependencies": {
+    "rescript": "12.3.0"
+  }
+}
