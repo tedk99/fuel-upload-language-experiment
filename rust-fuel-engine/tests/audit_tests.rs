@@ -130,6 +130,8 @@ fn batch(row: RowDecision) -> BatchDecision {
 
 fn transaction(source_id: &str) -> FuelTransaction {
     FuelTransaction {
+        transaction_id: TransactionId(format!("{source_id}:vehicle-1")),
+        row_number: RowNumber(1),
         source_id: SourceRowId(source_id.to_string()),
         vehicle_id: VehicleId("vehicle-1".to_string()),
         occurred_on: FuelDate("2026-05-21".to_string()),

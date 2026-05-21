@@ -11,6 +11,7 @@ import FuelUpload.Domain.Primitive
 import FuelUpload.Domain.Row
 import FuelUpload.Domain.Vehicle
 import FuelUpload.Properties
+import FuelUpload.Report
 import Test.Hspec
 
 main :: IO ()
@@ -308,6 +309,96 @@ main =
             audit = onlyAudit (projectAudit batch)
         auditKind audit `shouldBe` AuditAccepted
         auditTransactionId audit `shouldBe` Just (TransactionId "txn-impossible")
+
+    describe "operational report projection" do
+      it "includes decision-derived operational lists" do
+        let warningTransaction =
+              (validTransactionFor (validRow {parsedRowNumber = RowNumber 2, parsedExternalRowId = ExternalRowId "row-2"}))
+                {transactionId = TransactionId "txn-2"}
+            rejectedRowValue = validRow {parsedRowNumber = RowNumber 3, parsedExternalRowId = ExternalRowId "row-3", parsedQuantity = FuelQuantity 0}
+            skippedRowValue = validRow {parsedRowNumber = RowNumber 4, parsedExternalRowId = ExternalRowId "row-4"}
+            quarantineTransaction =
+              (validTransactionFor (validRow {parsedRowNumber = RowNumber 5, parsedExternalRowId = ExternalRowId "row-5"}))
+                {transactionId = TransactionId "txn-quarantine"}
+            decisions =
+              [ Accepted (validTransaction {transactionId = TransactionId "txn-1"})
+              , AcceptedWithWarnings warningTransaction (QuantityAboveWarningThreshold (FuelQuantity 75) (FuelQuantity 60) :| [])
+              , Rejected
+                  RejectedRow
+                    { rejectedRow = rejectedRowValue
+                    , rejectionReason = RowFailedValidation (QuantityMustBePositive (FuelQuantity 0) :| [])
+                    }
+              , SkippedDuplicate
+                  SkippedDuplicateInfo
+                    { skippedRow = skippedRowValue
+                    , duplicateSkipReason = AlreadyFinalized (TransactionId "previous")
+                    }
+              , Quarantined quarantineTransaction (SuspiciousMerchantName :| [])
+              ]
+            batch =
+              BatchDecision
+                { batchRows = decisions
+                , batchSummary = batchSummary (classifyBatch defaultConfig Normal [validUniqueContext])
+                , batchOutcome = BatchUploadable
+                }
+            report = projectOperationalReport batch
+        operationalStatus report `shouldBe` OperationalReady
+        operationalUploadedTransactionIds report `shouldBe` [TransactionId "txn-1", TransactionId "txn-2"]
+        operationalRejectedRowNumbers report `shouldBe` [RowNumber 3]
+        operationalSkippedDuplicateRowNumbers report `shouldBe` [RowNumber 4]
+        operationalQuarantinedRows report
+          `shouldBe` [ OperationalQuarantinedRow
+                         { operationalQuarantinedRowNumber = RowNumber 5
+                         , operationalQuarantineReasons = [SuspiciousMerchantName]
+                         }
+                     ]
+
+      it "fatal report has fatal status and no uploaded transactions" do
+        let fatalError = DuplicateCheckUnavailable (RowNumber 6)
+            decisions = [Accepted (validTransaction {transactionId = TransactionId "txn-blocked"}), Fatal fatalError]
+            summary =
+              BatchSummary
+                { summaryAccepted = 1
+                , summaryAcceptedWithWarnings = 0
+                , summaryQuarantined = 0
+                , summarySkippedDuplicates = 0
+                , summaryRejected = 0
+                , summaryFatal = 1
+                , summaryTotalRows = 2
+                }
+            batch =
+              BatchDecision
+                { batchRows = decisions
+                , batchSummary = summary
+                , batchOutcome = BatchBlockedByFatal (fatalError :| [])
+                }
+            report = projectOperationalReport batch
+        operationalStatus report `shouldBe` OperationalFatal
+        operationalUploadedTransactionIds report `shouldBe` []
+        operationalFatalErrors report `shouldBe` [fatalError]
+
+      it "uses existing summary and does not inspect raw input rows" do
+        let impossibleRow = validRow {parsedQuantity = FuelQuantity 0}
+            transaction = (validTransactionFor impossibleRow) {transactionId = TransactionId "txn-decision-only"}
+            summary =
+              BatchSummary
+                { summaryAccepted = 42
+                , summaryAcceptedWithWarnings = 5
+                , summaryQuarantined = 4
+                , summarySkippedDuplicates = 3
+                , summaryRejected = 2
+                , summaryFatal = 0
+                , summaryTotalRows = 99
+                }
+            batch =
+              BatchDecision
+                { batchRows = [Accepted transaction]
+                , batchSummary = summary
+                , batchOutcome = BatchUploadable
+                }
+            report = projectOperationalReport batch
+        operationalCounts report `shouldBe` summary
+        operationalUploadedTransactionIds report `shouldBe` [TransactionId "txn-decision-only"]
 
     describe "DTO API boundary" do
       it "maps and classifies a valid DTO request" do

@@ -87,6 +87,8 @@ fn response_dto_represents_all_decision_shapes() {
 fn response_summary_uses_domain_summary_without_recomputing() {
     let decision = BatchDecision::Ready {
         rows: vec![RowDecision::Accepted(FuelTransaction {
+            transaction_id: TransactionId("row-1:vehicle-1".to_string()),
+            row_number: RowNumber(1),
             source_id: SourceRowId("row-1".to_string()),
             vehicle_id: VehicleId("vehicle-1".to_string()),
             occurred_on: FuelDate("2026-05-21".to_string()),

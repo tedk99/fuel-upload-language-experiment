@@ -498,6 +498,139 @@ let ``audit projection does not recompute classification`` () =
     Assert.Equal(AuditEventKind.Accepted, audit[0].Kind)
     Assert.Equal(Some "txn-impossible", audit[0].TransactionId)
 
+[<Fact>]
+let ``operational report includes decision derived row lists`` () =
+    let rows =
+        [ { Row = row 51
+            Decision =
+                RowDecision.Accepted
+                    { TransactionId = "txn-51"
+                      SourceRowNumber = 51
+                      Vehicle = vehicle
+                      OccurredAt = processingDate
+                      OdometerMiles = 10m
+                      FuelVolumeGallons = 10m
+                      TotalCost = 20m
+                      MerchantName = "Depot"
+                      ExternalReference = "ext-51"
+                      Mode = UploadMode.Normal } }
+          { Row = row 52
+            Decision =
+                RowDecision.AcceptedWithWarnings(
+                    { TransactionId = "txn-52"
+                      SourceRowNumber = 52
+                      Vehicle = vehicle
+                      OccurredAt = processingDate
+                      OdometerMiles = 10m
+                      FuelVolumeGallons = 70m
+                      TotalCost = 700m
+                      MerchantName = "Depot"
+                      ExternalReference = "ext-52"
+                      Mode = UploadMode.Normal },
+                    [ Warning.HighFuelVolume(70m, 60m) ]
+                ) }
+          { Row = row 53
+            Decision =
+                RowDecision.Rejected
+                    { Row = row 53
+                      Reasons = [ RejectionReason.ValidationFailed [ ValidationError.MissingMerchantName ] ] } }
+          { Row = row 54
+            Decision =
+                RowDecision.SkippedDuplicate
+                    { Row = row 54
+                      Mode = UploadMode.Normal
+                      PreviousAttempt = PreviousAttemptState.Finalized
+                      Reason = DuplicateSkipReason.NormalModeDuplicate } }
+          { Row = row 55
+            Decision =
+                RowDecision.Quarantined
+                    { Transaction =
+                        { TransactionId = "txn-quarantine"
+                          SourceRowNumber = 55
+                          Vehicle = vehicle
+                          OccurredAt = processingDate
+                          OdometerMiles = 10m
+                          FuelVolumeGallons = 33m
+                          TotalCost = 20m
+                          MerchantName = "Depot"
+                          ExternalReference = "ext-55"
+                          Mode = UploadMode.Normal }
+                      Reasons =
+                        QuarantineReasons.create [ QuarantineReason.SuspiciousQuantityPattern ]
+                        |> Option.get
+                      Warnings = [] } } ]
+    let summary = BatchSummary.summarize rows
+
+    let report = OperationalBatchReport.project (BatchDecision.Ready(rows, summary))
+
+    Assert.Equal(OperationalBatchStatus.Ready, report.Status)
+    Assert.Equal<string list>([ "txn-51"; "txn-52" ], report.UploadedTransactionIds)
+    Assert.Equal<int list>([ 53 ], report.RejectedRowNumbers)
+    Assert.Equal<int list>([ 54 ], report.SkippedDuplicateRowNumbers)
+    Assert.Equal(55, report.QuarantinedRows[0].RowNumber)
+    Assert.Equal<QuarantineReason list>(
+        [ QuarantineReason.SuspiciousQuantityPattern ],
+        report.QuarantinedRows[0].Reasons
+    )
+
+[<Fact>]
+let ``fatal operational report has fatal status and no uploaded transactions`` () =
+    let fatal = FatalProcessingError.DuplicateCheckUnavailable "duplicate store timed out"
+    let rows =
+        [ { Row = row 56
+            Decision =
+                RowDecision.Accepted
+                    { TransactionId = "txn-blocked"
+                      SourceRowNumber = 56
+                      Vehicle = vehicle
+                      OccurredAt = processingDate
+                      OdometerMiles = 10m
+                      FuelVolumeGallons = 10m
+                      TotalCost = 20m
+                      MerchantName = "Depot"
+                      ExternalReference = "ext-56"
+                      Mode = UploadMode.Normal } }
+          { Row = row 57
+            Decision = RowDecision.Fatal fatal } ]
+    let summary = BatchSummary.summarize rows
+
+    let report = OperationalBatchReport.project (BatchDecision.Blocked(rows, summary, [ fatal ]))
+
+    Assert.Equal(OperationalBatchStatus.Fatal, report.Status)
+    Assert.Empty report.UploadedTransactionIds
+    Assert.Equal<FatalProcessingError list>([ fatal ], report.FatalErrors)
+
+[<Fact>]
+let ``operational report uses existing summary and does not inspect raw input rows`` () =
+    let classified =
+        [ { Row = { row 58 with FuelVolumeGallons = 0m }
+            Decision =
+                RowDecision.Accepted
+                    { TransactionId = "txn-decision-only"
+                      SourceRowNumber = 58
+                      Vehicle = vehicle
+                      OccurredAt = processingDate
+                      OdometerMiles = 10m
+                      FuelVolumeGallons = 0m
+                      TotalCost = 20m
+                      MerchantName = "Depot"
+                      ExternalReference = "ext-58"
+                      Mode = UploadMode.Normal } } ]
+    let summary =
+        { TotalRows = 99
+          AcceptedRows = 42
+          AcceptedWithWarningRows = 5
+          WarningCount = 7
+          QuarantinedRows = 6
+          SkippedDuplicateRows = 4
+          RejectedRows = 3
+          FatalErrorRows = 0 }
+
+    let report = OperationalBatchReport.project (BatchDecision.Ready(classified, summary))
+
+    Assert.Equal(summary, report.Counts)
+    Assert.Equal<string list>([ "txn-decision-only" ], report.UploadedTransactionIds)
+
 let validDtoRow number : FuelUploadRowDto =
     { RowNumber = number
       VehicleKey = $"truck-{number}"
