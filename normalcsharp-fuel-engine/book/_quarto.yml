@@ -1,0 +1,68 @@
+project:
+  type: book
+  output-dir: _build
+
+book:
+  title: "Blub & Fuel: Five Engines, One Domain"
+  subtitle: "A junior C# walk up the language ladder"
+  author: "Fieldale engineering"
+  date: today
+  reader-mode: true
+  search: true
+  page-navigation: true
+  repo-url: https://github.com/tedk99/experiment-normalcsharp
+  repo-actions: [edit, issue]
+  sidebar:
+    style: docked
+    collapse-level: 1
+
+  chapters:
+    - index.qmd
+    - setup.qmd
+    - part: "Part I — The Journey"
+      chapters:
+        - part1/01-blub-paradox.qmd
+        - part1/02-normal-csharp-tour.qmd
+        - part1/03-seven-footguns.qmd
+        - part1/04-idiomatic-csharp.qmd
+        - part1/05-fsharp-native.qmd
+        - part1/06-fsharp-interop.qmd
+        - part1/07-haskell-primer.qmd
+        - part1/08-haskell-safety.qmd
+        - part1/09-rust-lands.qmd
+        - part1/10-the-punch.qmd
+    - part: "Part Ib — The Boundary Returns"
+      chapters:
+        - part1b/11-boundary-returns.qmd
+        - part1b/12-boundary-side-by-side.qmd
+        - part1b/13-final-takeaway.qmd
+    - part: "Part II — The Reference"
+      chapters:
+        - part2/r1-decision.qmd
+        - part2/r2-validation.qmd
+        - part2/r3-recovery.qmd
+        - part2/r4-boundary.qmd
+        - part2/r5-exhaustiveness.qmd
+        - part2/r6-mutability.qmd
+        - part2/r7-null.qmd
+    - references.qmd
+
+format:
+  html:
+    theme: cosmo
+    code-tools: true
+    code-fold: false
+    code-line-numbers: false
+    fig-cap-location: bottom
+    toc: true
+    toc-depth: 3
+    mermaid:
+      theme: neutral
+  epub:
+    toc-depth: 3
+    mermaid:
+      theme: neutral
+
+execute:
+  freeze: auto
+  echo: true

@@ -1,0 +1,143 @@
+---
+title: "The Blub Paradox"
+---
+
+## A junior with a 50-million-row problem {.unnumbered}
+
+A team is uploading fuel transactions. Lots of them. Some are valid, some
+are duplicates of previous failed attempts, some are quarantined for
+manual review, some are rejected outright. The pipeline is small, the
+business rules are real, and the cost of a bug is measured in misposted
+fuel charges.
+
+A junior on the team writes the first version. It builds. The tests pass.
+The happy path works. Three weeks later, a batch run in production
+**crashes the whole upload** on the first row whose vehicle isn't in the
+lookup table. Another month later, a quieter bug is found: the aggressive
+recovery mode silently skips rows it was supposed to reprocess. Three
+weeks after *that*, a consumer of the response API breaks because someone
+typo'd the status string.
+
+None of these are bugs of *logic*. The logic is fine. They are bugs of
+**what the language let the junior express**.
+
+## What this book is
+
+This book sets up a deliberately junior-to-mid level C# implementation of
+that fuel-upload engine, walks through the seven bugs it lets you ship,
+and then climbs the language ladder one rung at a time — idiomatic C#,
+F#, Haskell, Rust — showing **which class of bug each rung makes
+impossible**.
+
+## Paul Graham's blub paradox
+
+In a 2001 essay, Paul Graham described a paradox programmers fall into:
+
+> Programmers, when they compare languages, judge them by their own
+> language as the standard. If they don't know language X, then X looks
+> hard to learn, redundant in features they already have, or even —
+> paradoxically — *missing* features they don't realise they're missing.
+
+He called the hypothetical mid-power language "Blub." A Blub programmer
+looks **down** the power scale and sees obvious deficiencies in weaker
+languages. A Blub programmer looking **up** sees only weirdness — pointless
+abstraction, syntactic noise, things they could "do anyway" with enough
+care.
+
+The paradox is that **you cannot see what your language is missing while
+you're inside it**. Higher-power languages don't make you write less code;
+they make whole categories of mistake **structurally impossible**. From
+inside the lower-power language you can't see the categories, because
+your language doesn't *talk about* them.
+
+## The fuel engine, five times
+
+We picked a small but real domain: parse fuel rows → validate them →
+check the vehicle exists → check for duplicates → apply a recovery policy
+→ either accept, accept-with-warnings, quarantine, skip, or reject the
+row → summarise the batch. The pipeline shape is the same in all five
+implementations:
+
+```mermaid
+flowchart LR
+    Parse --> Validate --> Vehicle[Vehicle lookup] --> Duplicate[Duplicate check]
+    Duplicate --> Decide{Decide}
+    Decide --> Accept[Accepted]
+    Decide --> AcceptWarn[Accepted with warnings]
+    Decide --> Quarantine[Quarantined]
+    Decide --> Skip[Skipped duplicate]
+    Decide --> Reject[Rejected]
+    Decide --> Fatal[Fatal]
+    Accept --> Summary
+    AcceptWarn --> Summary
+    Quarantine --> Summary
+    Skip --> Summary
+    Reject --> Summary
+    Fatal --> Summary
+```
+
+What differs across the five implementations is **the type system you
+have to express that pipeline in**.
+
+## The ladder
+
+We're going to climb it in this order:
+
+1. **Normal junior C#** — the version that ships first. No nullable
+   reference types, mutable POCOs everywhere, string-typed status, exception
+   for control flow. We document the [seven footguns](03-seven-footguns.qmd)
+   it makes easy.
+
+2. **Idiomatic C#** — same language, modern features turned on.
+   Sealed-record discriminated unions, NRT, switch expressions on type
+   patterns, `IReadOnlyList<T>`. Closes six of the seven footguns.
+   [Read it →](04-idiomatic-csharp.qmd)
+
+3. **F#** — leaves C# behind. Native discriminated unions, exhaustive
+   pattern matching that the compiler *enforces*, immutability by default,
+   no nulls in F#'s own types. The footgun list shrinks again.
+   [Read it →](05-fsharp-native.qmd)
+
+4. **Haskell** — the type-driven extreme. Algebraic data types are the
+   *natural* way to model anything. `NonEmpty` lets you say "this list has
+   at least one element" *at the type level*. Side effects are tracked in
+   the signature.
+   [Read it →](07-haskell-primer.qmd)
+
+5. **Rust** — same algebraic types as Haskell, plus *ownership*. Memory
+   safety without a garbage collector. Exhaustive `match` enforced by the
+   compiler. A different goal (systems programming) but lands in nearly the
+   same place on this domain.
+   [Read it →](09-rust-lands.qmd)
+
+At each rung we ask the same four questions:
+
+- What does this rung **protect against** that the one below didn't?
+- What can **still** go wrong?
+- Is it **easier or harder** to read?
+- How easy is it to **extend** — to add a 7th `RowDecision` case?
+
+## What the book is not
+
+It is not a polemic for any particular language. The idiomatic C# branch
+closes six of seven footguns; F# closes them more cheaply; Haskell makes
+the seventh structurally impossible at the cost of a steeper learning
+curve; Rust pays for the same guarantees with the borrow checker. There
+is no free lunch on this ladder. The point is to **see** the tradeoffs,
+not to ratify a winner.
+
+## How to use it
+
+If you have an hour, read Part I straight through. The blub-paradox
+journey lands in one sitting.
+
+If you want a reference, jump to [Part II](../part2/r1-decision.qmd) — each
+chapter is one feature (modelling decisions, validation, recovery,
+exhaustiveness, mutability, null, the boundary) shown five times side-by-side.
+
+If you're skeptical of any chapter's claim, the source code is in the same
+repository under `csharp-fuel-engine/`, `fsharp-fuel-engine/`,
+`haskell-fuel-engine/`, and `rust-fuel-engine/`. Build instructions are in
+[Setup](../setup.qmd).
+
+Let's start with the version that ships first.

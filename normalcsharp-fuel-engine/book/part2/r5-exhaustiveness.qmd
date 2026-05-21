@@ -1,0 +1,230 @@
+---
+title: "Exhaustiveness"
+---
+
+## "I added a 7th `RowDecision` case." {.unnumbered}
+
+This is the chapter where the ladder bites hardest. Imagine product
+asks for a new outcome:
+
+> `Throttled` — the row is fine, but the upstream API rate-limited
+> us. Re-queue it for later. Do not skip, do not reject.
+
+You add the case. What happens?
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> Added: Add Throttled case
+    Added --> NormalCS: normal C#
+    Added --> IdiomaticCS: idiomatic C#
+    Added --> Fsharp: F#
+    Added --> Haskell: Haskell
+    Added --> Rust: Rust
+
+    NormalCS --> Silent: 0 errors, 0 warnings
+    Silent --> Production: ships
+    Production --> BugReport: misposted batches
+
+    IdiomaticCS --> Runtime: build green
+    Runtime --> RuntimeThrow: InvalidOperationException at first match
+    RuntimeThrow --> Hotfix
+
+    Fsharp --> WarningF: FS0025 non-exhaustive match
+    WarningF --> WerrorF: --warnaserror -> compile error
+    WerrorF --> Caught
+
+    Haskell --> CompileH: -Wall + -Werror -> compile error
+    CompileH --> Caught
+
+    Rust --> CompileR: E0004 non-exhaustive patterns
+    CompileR --> Caught
+```
+
+Five engines, five different moments at which the compiler tells you
+about the missing case (or doesn't).
+
+## Normal C# — silent
+
+Add `public const string Throttled = "Throttled";` to your row's
+`Status` field. Now go look at the consumer:
+
+```csharp
+// normalcsharp-fuel-engine/src/FuelUploadEngine/Services/FuelUploadService.cs
+switch (d.Status)
+{
+    case "Accepted":              s.Accepted++; break;
+    case "AcceptedWithWarnings":  s.AcceptedWithWarnings++; break;
+    case "Quarantined":           s.Quarantined++; break;
+    case "Skipped":               s.Skipped++; break;
+    case "Rejected":              s.Rejected++; break;
+    case "Fatal":                 s.Fatal++; break;
+    // No default branch -- any "new" status string we forget
+    // to handle here will silently fail to be counted.
+}
+```
+
+No default branch. Throttled rows are produced (somewhere) and then
+**silently dropped from the summary counts**. The totals stop adding
+up. No test fails. No exception is thrown. Production keeps running.
+The bug is discovered three weeks later when finance reconciles.
+
+This is footgun #7 in [the seven footguns
+chapter](../part1/03-seven-footguns.qmd).
+
+## Idiomatic C# — runtime throw
+
+```csharp
+return decision switch
+{
+    RowDecision.AcceptedTransaction accepted        => /* ... */,
+    RowDecision.AcceptedTransactionWithWarnings ... => /* ... */,
+    RowDecision.QuarantinedRow quarantined          => /* ... */,
+    RowDecision.SkippedDuplicate skipped            => /* ... */,
+    RowDecision.RejectedRow rejected                => /* ... */,
+    RowDecision.FatalProcessingError fatal          => /* ... */,
+    _ => throw new InvalidOperationException("Unhandled row decision.")
+};
+```
+
+You add `RowDecision.ThrottledRow`. The code compiles — the
+`_ =>` default catches it. Tests probably pass (none of them produce
+a `ThrottledRow` yet). The bug ships. First production batch that
+emits a `Throttled` row crashes the response mapper at the runtime
+throw.
+
+This is **strictly better than normal C#**: the failure is loud, the
+stack trace points at the unhandled case. But it's still runtime, and
+the compiler had all the information it needed to refuse the build.
+It just doesn't.
+
+The reason is that C#'s exhaustiveness analysis for switch
+expressions on sealed-record hierarchies is **best-effort** — the
+compiler can warn about a few obvious patterns (omitting `null`,
+omitting a known case in some configurations) but it does not in
+general prove that the listed patterns cover the closed hierarchy.
+The default arm is required boilerplate, and once you have it the
+warning goes away.
+
+## F# — non-exhaustive match warning
+
+```fsharp
+match decision with
+| RowDecision.Accepted t -> /* ... */
+| RowDecision.AcceptedWithWarnings (t, ws) -> /* ... */
+| RowDecision.Quarantined q -> /* ... */
+| RowDecision.SkippedDuplicate s -> /* ... */
+| RowDecision.Rejected r -> /* ... */
+| RowDecision.Fatal f -> /* ... */
+```
+
+Add `| Throttled of ThrottledRow` to the union. **Every** match
+expression in the codebase that pattern-matched on `RowDecision`
+lights up with **warning FS0025**:
+
+```
+warning FS0025: Incomplete pattern matches on this expression.
+For example, the value 'Throttled (_)' may indicate a case not covered by the pattern(s).
+```
+
+This is *configurable*. By default F# treats FS0025 as a warning.
+With `<WarningsAsErrors>FS0025</WarningsAsErrors>` (or `--warnaserror`
+in the build), it becomes a compile error. The Fieldale F# engine
+ships with that promotion on, so the build *refuses* to compile until
+every match is fixed.
+
+The warning lists the missing constructor by name. The fix is
+trivial. The bug never reaches a test, let alone production.
+
+## Haskell — `-Wall -Werror`
+
+```haskell
+case decision of
+  Accepted t                 -> /* ... */
+  AcceptedWithWarnings t ws  -> /* ... */
+  Quarantined t rs           -> /* ... */
+  SkippedDuplicate s         -> /* ... */
+  Rejected r                 -> /* ... */
+  Fatal f                    -> /* ... */
+```
+
+GHC's `-Wincomplete-patterns` warns on the missing constructor. The
+project's `cabal.project` sets `-Wall -Werror`, which promotes every
+warning to an error.
+
+```
+src/FuelUpload/DecisionEngine.hs:42:3: error: [-Wincomplete-patterns, -Werror=incomplete-patterns]
+    Pattern match(es) are non-exhaustive
+    In a case alternative: Patterns of type 'RowDecision' not matched: Throttled _
+```
+
+The build fails. Every place the missing case affects fails at the
+same time. No production exposure.
+
+Haskell goes a step further than F# here: there's no concept of "the
+default arm" in idiomatic Haskell. You don't write `_ -> error
+"unreachable"`. The intended idiom is to **list every constructor**,
+and the compiler's job is to confirm the list is complete.
+
+## Rust — compile error, no opt-out
+
+```rust
+match decision {
+    RowDecision::Accepted(t)               => /* ... */,
+    RowDecision::Warning { transaction, warnings } => /* ... */,
+    RowDecision::Quarantined { .. }        => /* ... */,
+    RowDecision::SkippedDuplicate(s)       => /* ... */,
+    RowDecision::Rejected(r)               => /* ... */,
+    RowDecision::Fatal(f)                  => /* ... */,
+}
+```
+
+Add `Throttled(ThrottledRow)` to the enum. Rust's compiler:
+
+```
+error[E0004]: non-exhaustive patterns: `RowDecision::Throttled(_)` not covered
+  --> src/engine/classifier.rs:42:11
+   |
+42 |     match decision {
+   |           ^^^^^^^^ pattern `RowDecision::Throttled(_)` not covered
+```
+
+This is **not a warning that you opted into**. It is the language's
+type-checker refusing to compile a `match` that does not cover the
+domain. There is no `--allow-non-exhaustive-match` flag. The only way
+past this error is to add the arm.
+
+`cargo test` doesn't even reach the test phase. The build fails. The
+PR cannot be merged.
+
+## The ladder
+
+| Engine | Detection of new variant | Default arm? | Can be opted out? | Production exposure if forgotten |
+|---|---|---|---|---|
+| normal C# | none (strings) | implicit no-op | n/a | full — silent miscount |
+| idiomatic C# | runtime, on first hit | required `_ => throw` | n/a | partial — loud crash on first new row |
+| F# | compile warning FS0025 | optional `_ -> ...` | yes (default is warning) | none if `--warnaserror` is on |
+| Haskell | compile error with `-Wall -Werror` | not idiomatic | yes (`-Wno-incomplete-patterns`) | none with project defaults |
+| Rust | compile error E0004 | not allowed | **no** | none |
+
+## What "exhaustive" buys you
+
+The reason exhaustiveness matters is not that you'll forget to handle
+a case **today**. You won't — when you add `Throttled`, you're aware
+of it. The reason it matters is that **the next person to touch the
+domain three years from now** also won't forget, because they can't.
+The compiler will not let them.
+
+In a domain like fuel upload — where the decision type is the
+audit trail, and where missing a case means misposted money — that
+property is worth measurable engineering hours per year. It's also
+the single hardest property to retrofit. Once you've adopted "the
+default arm is fine", the discipline that prevents footgun #7 is no
+longer mechanical; it depends on every engineer remembering, every
+time, to check every consumer of every sum type.
+
+The compiler is cheaper.
+
+For the narrative version, see [chapter 5 — F# native
+features](../part1/05-fsharp-native.qmd) and the journey's
+"how easy is it to extend?" question.

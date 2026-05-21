@@ -1,0 +1,186 @@
+---
+title: "Modelling the row decision"
+---
+
+## Six outcomes, five shapes {.unnumbered}
+
+Every engine classifies each fuel row into exactly one of six outcomes:
+`Accepted`, `AcceptedWithWarnings`, `Quarantined`, `SkippedDuplicate`,
+`Rejected`, `Fatal`. The decision is the **central type** of the domain
+— almost every other type either feeds it or is computed from it.
+
+What changes across the five engines is **how that "exactly one of"
+shows up in the type system**. The shape of the type is the shape of
+the answer to the question "what can this value be?"
+
+## Normal C# — one flat class with a string discriminator
+
+```csharp
+// normalcsharp-fuel-engine/src/FuelUploadEngine/Models/RowDecision.cs
+public class RowDecision
+{
+    public int RowNumber;
+    public string Status;                   // "Accepted" | "AcceptedWithWarnings" | "Quarantined" | "Skipped" | "Rejected" | "Fatal"
+    public FuelTransaction Transaction;     // null when Status is Rejected / Fatal / Skipped
+    public Vehicle Vehicle;                 // null when vehicle lookup failed
+    public List<string> Errors = new List<string>();
+    public List<string> Warnings = new List<string>();
+    public List<string> QuarantineReasons = new List<string>();
+    public string SkipReason;
+    public string FatalMessage;
+}
+```
+
+Every field exists on every decision. Which fields are *meaningful*
+depends on which string `Status` carries. The compiler can't help —
+it sees a flat record where any combination of populated and null
+fields is structurally legal. "Accepted with `FatalMessage` populated"
+is a value this type happily holds.
+
+Cost: every consumer must defensively null-check, switch on a string,
+and trust the producer's invariants. The comment in the source
+("populated when Status == ...") *is* the type system here.
+
+## Idiomatic C# — sealed-record discriminated union
+
+```csharp
+// csharp-fuel-engine/src/FuelUploadEngine/Domain/RowDecision.cs
+public abstract record RowDecision
+{
+    private RowDecision() { }
+
+    public sealed record AcceptedTransaction(FuelTransaction Transaction) : RowDecision;
+    public sealed record AcceptedTransactionWithWarnings(
+        FuelTransaction Transaction,
+        IReadOnlyList<UploadWarning> Warnings) : RowDecision;
+    public sealed record QuarantinedRow : RowDecision { /* checked ctor */ }
+    public sealed record SkippedDuplicate(
+        RowNumber RowNumber, DuplicateState Duplicate, DuplicateSkipCode Reason) : RowDecision;
+    public sealed record RejectedRow(RowNumber RowNumber, RejectionReason Reason) : RowDecision;
+    public sealed record FatalProcessingError(RowNumber RowNumber, FatalError Error) : RowDecision;
+}
+```
+
+The private constructor on the abstract parent is load-bearing — it
+prevents anyone outside the file declaring a seventh subtype. Each
+case carries exactly the fields it needs and nothing else. The
+`QuarantinedRow` constructor checks `reasons.Count > 0` at runtime —
+the closest C# can get to "non-empty list" at the type level.
+
+Cost: a lot of boilerplate, and consumers still rely on the **switch
+expression** to be exhaustive. There is no compile-time exhaustiveness
+guarantee — see [exhaustiveness](r5-exhaustiveness.qmd) for what that
+means in practice.
+
+## F# — native discriminated union
+
+```fsharp
+// fsharp-fuel-engine/FuelUpload.Domain/Decision.fs
+[<RequireQualifiedAccess>]
+type RowDecision =
+    | Accepted of AcceptedTransaction
+    | AcceptedWithWarnings of AcceptedTransaction * Warning list
+    | Quarantined of QuarantinedRow
+    | SkippedDuplicate of SkippedDuplicate
+    | Rejected of RejectedRow
+    | Fatal of FatalProcessingError
+```
+
+Six lines. The compiler enforces that you can only construct one of
+these six things. Pattern matching is enforced exhaustive by default
+(with a configurable warning that you can promote to an error). The
+non-empty list for quarantine reasons is enforced by a separate
+`QuarantineReasons` wrapper type with a private constructor —
+declared once, used everywhere.
+
+Cost: F# is still on .NET. The CLR sees these as classes and pattern
+matching compiles to runtime type tests. The `[<CLIMutable>]`
+attribute on adjacent records (used for JSON interop) opens a null
+hole for the unwary — see [null](r7-null.qmd).
+
+## Haskell — algebraic data type
+
+```haskell
+-- haskell-fuel-engine/src/FuelUpload/Domain/Decision.hs
+data RowDecision
+  = Accepted FuelTransaction
+  | AcceptedWithWarnings FuelTransaction (NonEmpty ValidationWarning)
+  | Quarantined FuelTransaction (NonEmpty QuarantineReason)
+  | SkippedDuplicate SkippedDuplicate
+  | Rejected RejectedRow
+  | Fatal FatalError
+  deriving stock (Eq, Show)
+```
+
+Same shape as F#, with one quiet upgrade: `NonEmpty` is a real type
+constructor, not a wrapper around a list with a runtime check. A
+function returning `NonEmpty QuarantineReason` *cannot* return an
+empty list — you cannot construct one. The "no quarantined row
+without reasons" invariant is enforced at compile time, statically,
+with no boilerplate.
+
+Cost: it's Haskell. The runtime story is non-trivial to integrate
+into a .NET shop, and `NonEmpty` is one example of a library type
+that doesn't have a frictionless C# equivalent. See [the
+boundary](r4-boundary.qmd).
+
+## Rust — sum type via `enum`
+
+```rust
+// rust-fuel-engine/src/domain/decision.rs
+pub enum RowDecision {
+    Accepted(FuelTransaction),
+    Warning {
+        transaction: FuelTransaction,
+        warnings: Vec<Warning>,
+    },
+    Quarantined {
+        transaction: FuelTransaction,
+        reasons: QuarantineReasons,
+        warnings: Vec<Warning>,
+    },
+    SkippedDuplicate(SkippedDuplicate),
+    Rejected(RejectedRow),
+    Fatal(FatalError),
+}
+```
+
+Rust's `enum` is a proper tagged union. Each variant can have its
+own positional or named fields. `match` on a `RowDecision` is
+**exhaustive at compile time** — leaving a variant out is a compiler
+error, not a warning. `QuarantineReasons` is a newtype that wraps a
+`Vec` and refuses to be constructed empty — same trick as F#'s
+non-empty wrapper.
+
+Cost: ownership and lifetimes. The cases themselves are cheap, but
+moving them around — especially across a borrow boundary into a DTO
+— costs you the borrow checker's full attention.
+
+## The ladder, summarised
+
+```mermaid
+flowchart LR
+    A[strings + nulls<br/>normal C#] --> B[sealed records<br/>idiomatic C#]
+    B --> C[discriminated unions<br/>F#]
+    C --> D[ADTs + NonEmpty<br/>Haskell]
+    C --> E[enum + match<br/>Rust]
+```
+
+| Engine | Shape | "Accepted with FatalMessage populated" |
+|---|---|---|
+| normal C# | one flat class + status string | structurally legal |
+| idiomatic C# | sealed-record DU, private ctor | impossible to construct |
+| F# | native DU | impossible to construct |
+| Haskell | ADT + NonEmpty | impossible; non-empty enforced at type level |
+| Rust | enum + newtype | impossible; exhaustive match enforced |
+
+The thing to notice is **how much less the higher-rung types need to
+say to mean the same thing**. The normal-C# type is 18 lines of
+fields. The F# type is six lines. They model the same six outcomes.
+The difference is who pays for the invariants — the compiler, or
+every consumer at every callsite.
+
+See [chapter 2 of the journey](../part1/02-normal-csharp-tour.qmd)
+for the narrative version of why this matters, and [chapter
+04](../part1/04-idiomatic-csharp.qmd) for the moment the type model
+flips.

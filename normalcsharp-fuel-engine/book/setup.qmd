@@ -1,0 +1,80 @@
+---
+title: "Setup"
+---
+
+# Running the code yourself {.unnumbered}
+
+You don't need any of this to *read* the book — the chapters quote the
+real source and explain everything. But the lessons stick harder when you
+can break something and watch the compiler complain.
+
+## The five engines
+
+Each implementation lives in a sibling directory:
+
+```
+experiment-normalcsharp/
+├── normalcsharp-fuel-engine/   # the "junior C#" version (this book lives here)
+├── csharp-fuel-engine/         # idiomatic C#
+├── fsharp-fuel-engine/         # F#
+├── haskell-fuel-engine/        # Haskell
+└── rust-fuel-engine/           # Rust
+```
+
+## Build and test each one
+
+| Engine     | Toolchain     | Build                       | Test               |
+| ---------- | ------------- | --------------------------- | ------------------ |
+| Normal C#  | .NET 10 SDK   | `dotnet build NormalCSharpFuelEngine.slnx` | `dotnet test` |
+| C#         | .NET 10 SDK   | `dotnet build FuelUploadEngine.slnx`       | `dotnet test` |
+| F#         | .NET 10 SDK   | `dotnet build FSharpFuelEngine.slnx`       | `dotnet test` |
+| Haskell    | GHC 9.4+ + cabal | `cabal build`                            | `cabal test`  |
+| Rust       | rustc 1.80+ + cargo | `cargo build`                          | `cargo test`  |
+
+Install pointers:
+
+- **.NET 10 SDK** — <https://dotnet.microsoft.com/download>
+- **GHC + cabal** — easiest via [GHCup](https://www.haskell.org/ghcup/)
+- **Rust** — `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+
+## Rendering this book
+
+The book is built with [Quarto](https://quarto.org). To re-render it:
+
+```bash
+cd normalcsharp-fuel-engine/book
+quarto render             # HTML (default) -> book/_build/
+quarto render --to epub   # EPUB -> book/_build/Blub-and-Fuel.epub
+quarto preview            # live-reload local server
+```
+
+## Optional: turning on the runnable code cells
+
+Some chapters in Part II contain C# and F# snippets that *can* run live
+during render — you see the actual output baked into the page. Today
+they're rendered as static snippets. To enable execution:
+
+```bash
+# 1. Install Jupyter (the kernel host)
+python3 -m pip install --user jupyter
+
+# 2. Install the .NET Interactive global tool
+dotnet tool install --global Microsoft.dotnet-interactive
+
+# 3. Register the C# / F# / PowerShell kernels with Jupyter
+dotnet interactive jupyter install
+
+# 4. Verify
+jupyter kernelspec list   # should show .net-csharp and .net-fsharp
+```
+
+Then re-render with `quarto render`. The cells marked `{dotnet-csharp}` and
+`{dotnet-fsharp}` will execute and embed their output.
+
+## Haskell and Rust cells
+
+Quarto can render fenced Haskell and Rust code blocks with syntax highlighting,
+but it does not execute them inline the way it does C#/F# via the .NET
+Interactive kernel. For those, the book quotes real source from
+`haskell-fuel-engine/` and `rust-fuel-engine/`, and you can run them in
+their own toolchains using the commands in the table above.

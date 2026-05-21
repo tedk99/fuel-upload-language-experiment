@@ -1,0 +1,246 @@
+---
+title: "Duplicate / recovery policy"
+---
+
+## The recovery matrix {.unnumbered}
+
+Four modes times five-ish previous-attempt states. The contract:
+
+| Mode | Accept the duplicate when |
+|---|---|
+| `Normal` | never |
+| `Retry` | previous attempt was explicitly retryable |
+| `ConservativeRecovery` | previous attempt failed *before* canonical finalization |
+| `AggressiveRecovery` | conservative case, *or* failed after canonical finalization but the canonical key never landed |
+
+The aggressive case is the subtle one. It's the case the normal-C#
+engine **gets wrong**, and it's the case higher-rung languages can
+keep the compiler honest about.
+
+```mermaid
+flowchart TD
+    Start[Duplicate detected] --> M{Mode}
+    M -- Normal --> Skip[Skip]
+    M -- Retry --> R{Previous retryable?}
+    R -- yes --> Up[Upload]
+    R -- no --> Skip
+    M -- ConservativeRecovery --> C{Failed before canonical?}
+    C -- yes --> Up
+    C -- no --> Skip
+    M -- AggressiveRecovery --> A{Failed before canonical?}
+    A -- yes --> Up
+    A -- no --> A2{Failed after canonical AND key missing?}
+    A2 -- yes --> Up
+    A2 -- no --> Skip
+```
+
+## Normal C# — booleans and string equality
+
+```csharp
+// normalcsharp-fuel-engine/src/FuelUploadEngine/Services/DuplicatePolicy.cs
+public static bool ShouldAcceptDuplicate(string mode, string previousOutcome, out string skipReason)
+{
+    skipReason = "";
+    if (mode == UploadModes.Normal) { skipReason = "NormalModeDuplicate"; return false; }
+
+    if (mode == UploadModes.Retry)
+    {
+        if (previousOutcome == PreviousOutcomes.RetryableFailure) return true;
+        skipReason = "RetryModeNotRetryable"; return false;
+    }
+
+    if (mode == UploadModes.ConservativeRecovery)
+    {
+        if (previousOutcome == PreviousOutcomes.FailedBeforeCanonicalFinalization) return true;
+        skipReason = "ConservativeRecoveryAlreadyCanonical"; return false;
+    }
+
+    if (mode == UploadModes.AggressiveRecovery)
+    {
+        if (previousOutcome == PreviousOutcomes.FailedBeforeCanonicalFinalization) return true;
+        // NOTE: we should also retry FailedAfterCanonicalFinalizationWithoutKey here.
+        // This branch was forgotten. See planted bug #3.
+        skipReason = "AggressiveRecoverySkipped"; return false;
+    }
+
+    skipReason = "UnknownMode"; return false;
+}
+```
+
+`mode` and `previousOutcome` are strings — runtime equality on
+constants from `UploadModes` and `PreviousOutcomes`. The aggressive
+case has a literal `// NOTE` admitting the missing branch. The
+language can't see that one of six previous-outcome strings has gone
+unhandled in this mode, because as far as C# is concerned the
+universe of legal strings is infinite. The bug ships and stays
+shipped.
+
+## Idiomatic C# — switch expression on sealed records
+
+```csharp
+// csharp-fuel-engine/src/FuelUploadEngine/Engine/DuplicatePolicy.cs
+return mode switch
+{
+    UploadMode.Normal => new RowDecision.SkippedDuplicate(/* ... */),
+
+    UploadMode.Retry when duplicate.PreviousOutcome is PreviousUploadOutcome.RetryableFailure => null,
+    UploadMode.Retry => new RowDecision.SkippedDuplicate(/* ... */),
+
+    UploadMode.ConservativeRecovery when duplicate.PreviousOutcome is PreviousUploadOutcome.FailedBeforeCanonicalFinalization => null,
+    UploadMode.ConservativeRecovery => new RowDecision.SkippedDuplicate(/* ... */),
+
+    UploadMode.AggressiveRecovery when duplicate.PreviousOutcome is PreviousUploadOutcome.FailedBeforeCanonicalFinalization => null,
+    UploadMode.AggressiveRecovery
+        when duplicate.PreviousOutcome is PreviousUploadOutcome.FailedAfterCanonicalFinalization
+             && duplicate.CanonicalTransactionKey is CanonicalTransactionKeyState.Missing => null,
+    UploadMode.AggressiveRecovery => new RowDecision.SkippedDuplicate(/* ... */),
+
+    _ => throw new InvalidOperationException("Unhandled upload mode.")
+};
+```
+
+`UploadMode` is an enum, `PreviousUploadOutcome` is a sealed-record
+DU, `CanonicalTransactionKeyState` is a sealed-record DU. The
+aggressive case has the **two-branch acceptance** explicit — the
+"failed before canonical" branch *and* the "failed after canonical
+with missing key" branch.
+
+But notice the `_ =>` at the bottom: a default arm that throws. The
+compiler cannot prove the previous arms exhaust the cross product of
+`UploadMode × PreviousUploadOutcome × CanonicalTransactionKeyState`,
+so the safety net is a runtime throw. Drop a single mode and the bug
+moves from "silent miscount" to "loud `InvalidOperationException`",
+which is better — but it's a runtime check, not a compile-time one.
+
+## F# — pattern match on the union
+
+```fsharp
+// fsharp-fuel-engine/FuelUpload.Domain/Duplicate.fs and DecisionEngine.fs
+let private resolveDuplicate mode previousAttempt =
+    match mode, previousAttempt with
+    | UploadMode.Normal, _ ->
+        Skip (DuplicateSkipReason.NormalModeDuplicate)
+
+    | UploadMode.Retry, PreviousAttemptState.RetryableFailure ->
+        Upload
+    | UploadMode.Retry, state ->
+        Skip (DuplicateSkipReason.RetryModeDuplicateNotRetryable state)
+
+    | UploadMode.ConservativeRecovery, PreviousAttemptState.FailedBeforeCanonicalFinalization ->
+        Upload
+    | UploadMode.ConservativeRecovery, state ->
+        Skip (DuplicateSkipReason.RecoveryModeDuplicateAlreadyCanonicalized state)
+
+    | UploadMode.AggressiveRecovery, PreviousAttemptState.FailedBeforeCanonicalFinalization ->
+        Upload
+    | UploadMode.AggressiveRecovery,
+      PreviousAttemptState.FailedAfterCanonicalizationWithoutCanonicalTransactionKey ->
+        Upload
+    | UploadMode.AggressiveRecovery, state ->
+        Skip (DuplicateSkipReason.RecoveryModeDuplicateAlreadyCanonicalized state)
+```
+
+The F# compiler will **warn** (and you can turn the warning into an
+error with `--warnaserror`) if the cross product is not exhaustively
+covered. If someone adds a seventh `PreviousAttemptState`, every
+match expression in the codebase that pattern-matched on it lights
+up. The aggressive case's two upload branches are visible side-by-side;
+the "did we forget one?" question is the compiler's job, not the
+reader's.
+
+## Haskell — guards on a function with full ADT match
+
+```haskell
+-- haskell-fuel-engine/src/FuelUpload/DuplicatePolicy.hs
+duplicateDecision :: UploadMode -> DuplicateState -> DuplicatePolicyDecision
+duplicateDecision _ UniqueRow =
+  UploadDuplicate
+duplicateDecision Normal (DuplicateOf previousAttempt) =
+  SkipDuplicate (skipReasonForPreviousAttempt previousAttempt)
+duplicateDecision Retry (DuplicateOf previousAttempt)
+  | previousFinalizationState previousAttempt == FailedRetryable =
+      UploadDuplicate
+  | otherwise =
+      SkipDuplicate (skipReasonForPreviousAttempt previousAttempt)
+duplicateDecision ConservativeRecovery (DuplicateOf previousAttempt)
+  | previousCanonicalizationState previousAttempt == FailedBeforeCanonicalization =
+      UploadDuplicate
+  | otherwise =
+      SkipDuplicate (skipReasonForPreviousAttempt previousAttempt)
+duplicateDecision AggressiveRecovery (DuplicateOf previousAttempt)
+  | previousCanonicalizationState previousAttempt == FailedBeforeCanonicalization =
+      UploadDuplicate
+  | previousCanonicalizationState previousAttempt == CanonicalizedWithoutTransactionKey
+      && previousFinalizationState previousAttempt /= Finalized =
+      UploadDuplicate
+  | otherwise =
+      SkipDuplicate (skipReasonForPreviousAttempt previousAttempt)
+```
+
+With `-Wall -Werror` (set in `cabal.project`), missing a constructor
+of `UploadMode` is a compile error. The aggressive case spells out
+both `UploadDuplicate` guards distinctly; a third mode like
+`Throttled` would refuse to compile until this function had a clause
+for it.
+
+## Rust — `match` on a tuple, fully exhaustive
+
+```rust
+// rust-fuel-engine/src/engine/duplicate_policy.rs
+match (mode, duplicate_check) {
+    (_, DuplicateCheckResult::Unique) => DuplicateGate::Continue,
+    (_, DuplicateCheckResult::Fatal(error)) => DuplicateGate::Fatal(error.clone()),
+    (UploadMode::Normal, DuplicateCheckResult::Duplicate(state)) =>
+        DuplicateGate::Skip(skipped_duplicate(row, state, mode)),
+
+    (UploadMode::Retry,
+     DuplicateCheckResult::Duplicate(DuplicateState::PreviousAttempt {
+        retry: RetryEligibility::ExplicitlyRetryable, ..
+     })) => DuplicateGate::Continue,
+    (UploadMode::Retry, DuplicateCheckResult::Duplicate(state)) =>
+        DuplicateGate::Skip(skipped_duplicate(row, state, mode)),
+
+    (UploadMode::ConservativeRecovery,
+     DuplicateCheckResult::Duplicate(DuplicateState::PreviousAttempt {
+        finalization: FinalizationState::FailedBeforeCanonicalFinalization, ..
+     })) => DuplicateGate::Continue,
+    (UploadMode::ConservativeRecovery, DuplicateCheckResult::Duplicate(state)) =>
+        DuplicateGate::Skip(skipped_duplicate(row, state, mode)),
+
+    (UploadMode::AggressiveRecovery,
+     DuplicateCheckResult::Duplicate(DuplicateState::PreviousAttempt {
+        finalization: FinalizationState::FailedBeforeCanonicalFinalization, ..
+     })) => DuplicateGate::Continue,
+    (UploadMode::AggressiveRecovery,
+     DuplicateCheckResult::Duplicate(DuplicateState::PreviousAttempt {
+        finalization: FinalizationState::FailedAfterCanonicalFinalization,
+        canonical_transaction: CanonicalTransactionKey::Missing, ..
+     })) => DuplicateGate::Continue,
+    (UploadMode::AggressiveRecovery, DuplicateCheckResult::Duplicate(state)) =>
+        DuplicateGate::Skip(skipped_duplicate(row, state, mode)),
+}
+```
+
+No `_ => unreachable!()`. The match is **structurally exhaustive on
+the tuple** — Rust's compiler walks the product of all variants and
+refuses to compile if any combination is unmatched. The aggressive
+case spells out the two acceptance branches *and* the catch-all
+skip; if a future change adds a `FinalizationState::SuspendedForReview`,
+this function fails to compile until you decide what aggressive mode
+should do with it.
+
+## The aggressive bug, lined up
+
+| Engine | What happens when the aggressive "failed after canonical, key missing" case is forgotten? |
+|---|---|
+| normal C# | Silent. Row is skipped. Code review sees an `if`-block with a comment but no test fails. |
+| idiomatic C# | Silent at compile time. Runtime: row is skipped (last arm matches). |
+| F# | **Warning** at compile time about non-exhaustive match. Can be promoted to an error. |
+| Haskell | **Compile error** with `-Wall -Werror` set. |
+| Rust | **Compile error**. Cannot be turned off. |
+
+Same domain rule. Five different answers to "is this enforced?"
+
+For the narrative version of the aggressive-recovery bug, see
+[chapter 3](../part1/03-seven-footguns.qmd) (footgun #3, missing
+recovery branch).

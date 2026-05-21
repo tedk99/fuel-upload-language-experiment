@@ -1,0 +1,143 @@
+---
+title: "The final takeaway"
+---
+
+## Two lessons {.unnumbered}
+
+This book has now made two arguments. The first was Part I: *types
+make domain bugs unrepresentable*. The second is Part Ib: *the bugs
+come back at the edges, and types help there too*.
+
+The two arguments together are the version of the blub-paradox lesson
+that matters for someone actually shipping a fuel-upload system. It is
+not enough for the language to model the domain. It also has to keep
+the boundary out of the domain. A clean pure function bolted to a CSV
+parser that hands you nullable strings is one careless `??` away from
+the same bugs the pure function was designed to prevent.
+
+V1 and V2 closed the first half. V3 closed the second half.
+
+## What to recommend a junior at Fieldale
+
+If a junior on the team asks "what should I read, and what should I
+write?", here is the honest answer that this experiment supports.
+
+**Read this book.** Both parts. Part I lands the vocabulary —
+discriminated unions, exhaustive matching, non-empty types,
+nullability tracking, typed errors. Part Ib lands the integration
+discipline — boundary translation, repository ports, typed projection,
+derive-don't-rebuild.
+
+**Write idiomatic C# first.** If you are going to touch .NET
+production code, your day-to-day language is C#. The
+[Idiomatic C#](../part1/04-idiomatic-csharp.qmd) chapter from Part I
+shows the shape: sealed-record discriminated unions, switch
+expressions on type patterns, `IReadOnlyList<T>`, NRT on. That code
+closes six of the seven domain footguns and most of the V3 boundary
+risks. The remaining gap — runtime-enforced exhaustiveness instead of
+compile-time — is closed by tests, which a typical .NET shop already
+has.
+
+**If you can introduce an F# project, do it for the domain core.**
+The V3 result is unambiguous: F# inside a .NET solution is the
+strongest combined shape this experiment found. The shape that works
+is a small F# `*.Domain` project — types, decision engine, projectors —
+called from C# at the framework edges. Not a wholesale rewrite. A
+typed island. The C# team owns controllers, dependency injection,
+database adapters, and serialization. The F# project owns
+discriminated unions, exhaustive matching, and the rules. The
+[F# learning guide](https://github.com/tedk99/experiment-normalcsharp/blob/main/docs/fsharp-learning-guide.md)
+in the repository is the how-to for that.
+
+**Treat Haskell as the reference oracle.** When someone says "is this
+domain modelled tightly?", the Haskell implementation is the answer.
+It has the strongest algebraic shape, the only property-based tests in
+the experiment, and the cleanest decision engine. It is also not a
+realistic production target for a .NET shop and the V3 audit was
+explicit about it:
+
+> Production suitability for a C#/.NET-heavy business app: low.
+> Tooling, hiring, deployment, and interop costs dominate despite the
+> excellent core model.
+
+> Reference implementation suitability: highest.
+
+Use it the way you would use a textbook. Read it to know whether your
+F# or C# model is missing something.
+
+**Treat Rust as a parallel option, not a .NET option.** If the team
+ever builds a fuel-import service as a standalone Rust binary —
+because the workload is throughput-sensitive, because there is a
+separate team that prefers Rust, because there is a Wasm story — the
+V3 Rust implementation shows it works. Strong enum discipline,
+exhaustive `match`, good tooling feedback. It is not the
+recommendation *inside* the .NET solution.
+
+## The updated closer
+
+The V2 takeaway was *each rung of the ladder makes a class of error
+unrepresentable*. The V3 takeaway updates that. Types help most at the
+*boundary*, because the boundary is where messy reality tries to push
+slop back into the domain.
+
+The pure decision engine in any of the four V3 languages is fine. The
+work that matters in production happens at the four edges:
+
+- CSV import → typed application DTOs, with typed errors at the edge.
+- Repository ports → typed lookup results that reach the domain
+  without a string round-trip.
+- Audit projection → exhaustive pattern match on `RowDecision`, with
+  text rendered only at the final DTO step.
+- Operational report → derived from `BatchDecision`, not from raw
+  rows.
+
+A language that makes those four shapes natural is doing more work
+than a language that just makes the pure decision engine natural. F#
+makes all four natural in a .NET-shaped solution; C# makes three of
+them natural and the fourth recoverable with tests; Haskell and Rust
+each make all four natural but outside the .NET production shape.
+
+## Where to read next
+
+There is a Part II reference in this book for any topic from Part I or
+Part Ib you want to see in five-language side-by-side form:
+
+- [Modelling the decision](../part2/r1-decision.qmd)
+- [Validation](../part2/r2-validation.qmd)
+- [Recovery policy](../part2/r3-recovery.qmd)
+- [The boundary](../part2/r4-boundary.qmd)
+- [Exhaustiveness](../part2/r5-exhaustiveness.qmd)
+- [Mutability](../part2/r6-mutability.qmd)
+- [Null and missing values](../part2/r7-null.qmd)
+
+For the V3 work specifically, the primary documents in the repository
+are:
+
+- `docs/v3-results.md` — the full V3 scoring, with per-language
+  verdicts and the answers to ten cross-language findings.
+- `docs/v3-experiment-plan.md` — what V3 was set up to test and why.
+- `docs/v3-phase-briefing.md` — the phase-by-phase good/bad shapes
+  with C# examples.
+- `docs/v3-scoring-rubric.md` — the seven categories the V3 scoring
+  rolled up.
+- `docs/fsharp-learning-guide.md` — the team-facing how-to for using
+  F# inside the .NET solution, including a worked example of adding a
+  new quarantine reason safely.
+- `docs/agent-notes/` — per-phase decisions and tradeoffs.
+
+The source code for each of the four V3 engines lives under
+`csharp-fuel-engine/`, `fsharp-fuel-engine/`, `haskell-fuel-engine/`,
+and `rust-fuel-engine/`. Each has its own `AGENTS.md` with the module
+map, key types, and known limitations.
+
+## One sentence
+
+If Part I taught you a vocabulary for *what your current language is
+missing*, Part Ib taught you a discipline for *what to do at the edge*.
+The domain can be clean. The boundary is where slop tries to sneak back
+in. Types help most when they protect the boundary between messy
+reality and the domain — and the language that protects that boundary
+cheapest, inside a .NET shop, is F#.
+
+That is the answer this experiment landed on. Read the chapters again
+when you forget why.

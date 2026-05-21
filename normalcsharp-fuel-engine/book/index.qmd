@@ -1,0 +1,66 @@
+---
+title: "Blub & Fuel"
+subtitle: "Five engines, one domain — a junior C# walk up the language ladder"
+---
+
+# Welcome {.unnumbered}
+
+This is a teaching book.
+
+It exists because a senior engineer can tell you "F# is better at this" and
+a junior will nod, but neither of them will know *what kind of bug* the
+junior was about to ship that F# would have refused to compile. Paul
+Graham calls this the **blub paradox** — you can't see what your current
+language is missing until you've used a more expressive one.
+
+So instead of one essay, we built the same small domain — a fuel-upload
+engine that parses transactions, validates them, decides duplicates,
+quarantines suspicious ones, and emits a summary — **five times**, in
+five different ways:
+
+| Engine                  | Style                                                    |
+| ----------------------- | -------------------------------------------------------- |
+| `normalcsharp-fuel-engine` | C# the way a junior writes it: mutable POCOs, string-typed status, exceptions as control flow, no NRT |
+| `csharp-fuel-engine`    | C# the way a senior writes it: sealed-record DUs, NRT, switch expressions, `IReadOnlyList`, records |
+| `fsharp-fuel-engine`    | F# — native discriminated unions, exhaustive pattern matching, immutability by default |
+| `haskell-fuel-engine`   | Haskell — type-driven everything: `NonEmpty`, `data`, purity, `IO` quarantine |
+| `rust-fuel-engine`      | Rust — same algebraic types as Haskell, plus ownership and zero-cost abstractions |
+
+All five produce the same outputs for the same inputs. They differ in
+**which class of bug each one even allows you to make**.
+
+## How to read this book
+
+There are two ways.
+
+**Part I — The Journey** is the linear narrative. You start at the normal-C#
+implementation, you walk up the ladder one rung at a time, and you watch
+each language make a class of error structurally impossible. Ten chapters,
+each 5–10 minutes. If you read end to end, that's the blub paradox
+delivered in one sitting.
+
+**Part II — The Reference** is the lookup. You pick a topic (modelling the
+decision, validation, recovery policy, exhaustiveness, mutability, null,
+boundary mapping) and see how all five languages handle it side-by-side,
+with tradeoffs called out. Each reference chapter is 1–3 pages.
+
+The two halves are cross-linked. Part I points into Part II when you'd
+benefit from a deeper side-by-side; Part II points back into Part I for the
+narrative context.
+
+## What you'll get out of it
+
+- A vocabulary for things your current language doesn't model — *exhaustive
+  pattern matching*, *non-null-by-default*, *discriminated unions*, *type-level
+  guarantees on collections*, *no hidden side effects*.
+- A clear picture of which of those each of these languages gives you for
+  free, which you have to opt into, and which require leaving the language.
+- A taxonomy of seven concrete footguns in junior C# code, mapped to the
+  language feature that would have closed each one.
+- An answer to "how easy is this to extend?" for each language. You'll see
+  what happens when you add a 7th case to a discriminated union in each one.
+
+## Source code
+
+All five implementations are checked in alongside this book. Read [`Setup`](setup.qmd)
+for how to build and run them locally.

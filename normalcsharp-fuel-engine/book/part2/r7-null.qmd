@@ -1,0 +1,247 @@
+---
+title: "Null and absence"
+---
+
+## "No value" needs a type {.unnumbered}
+
+A lot of the work in a decision engine is about absence. The vehicle
+lookup returned nothing. The previous attempt has no transaction
+key. The merchant name is missing. Each of these is a legitimate
+domain state — not a programming error — and the type system either
+lets you name it or it doesn't.
+
+When the type system *doesn't*, you get `null`. And `null` is the
+problem.
+
+The concrete example we use throughout: **"vehicle not found."** It's
+not an exception, it's not a bug, it's not a corrupt row. It's an
+ordinary outcome of an ordinary classification. Five engines model
+it five different ways.
+
+## Normal C# — `null` everywhere, NRT off
+
+```csharp
+// normalcsharp-fuel-engine/src/FuelUploadEngine/Models/RowDecision.cs
+public string Status;
+public FuelTransaction Transaction;       // null when Status is Rejected / Fatal / Skipped
+public Vehicle Vehicle;                   // null when vehicle lookup failed
+public string SkipReason;
+public string FatalMessage;
+```
+
+NRT is off in the `.csproj`. Every reference type is implicitly
+nullable. "Vehicle not found" is signalled by:
+
+1. `VehicleLookupStatus` string set to `"NotFound"`.
+2. `Vehicle` property left `null`.
+3. `Status` set to `"Rejected"`.
+4. An error string `"VehicleNotFound:..."` pushed onto `Errors`.
+
+Four implicit invariants encoded across four separately-typed fields.
+The compiler enforces none of them. A debug `Console.WriteLine` in
+the service reads `d.Vehicle.LicensePlate` unconditionally — for a
+`Rejected` row that's `null.LicensePlate`, and the whole batch dies
+with NullReferenceException. (See footgun #1 in [chapter
+03](../part1/03-seven-footguns.qmd).)
+
+`null` is the universal absence story. It also stands in for "I
+forgot to populate this", "the deserialiser left it default", and
+"this row failed before we got to that field." The same value, three
+meanings.
+
+## Idiomatic C# — NRT on, typed absence via DUs
+
+```csharp
+// csharp-fuel-engine/src/FuelUploadEngine/Domain/VehicleLookupResult.cs
+public abstract record VehicleLookupResult
+{
+    private VehicleLookupResult() { }
+
+    public sealed record Found(Vehicle Vehicle) : VehicleLookupResult;
+    public sealed record NotFound(VehicleIdentifier Identifier) : VehicleLookupResult;
+    public sealed record Ambiguous(VehicleIdentifier Identifier, IReadOnlyList<Vehicle> Candidates) : VehicleLookupResult;
+    public sealed record Unavailable(FatalError Error) : VehicleLookupResult;
+}
+```
+
+`<Nullable>enable</Nullable>` is set in the `.csproj`. Every domain
+property is non-nullable; the compiler enforces that you never assign
+`null` to one without an explicit `?`. "Vehicle not found" is a
+**named sum-type case** — `VehicleLookupResult.NotFound` carrying
+the requested identifier so the caller knows *which* vehicle wasn't
+found. It is not the absence of a `Vehicle` value; it's the
+**presence** of a typed "no-vehicle" value.
+
+Compare:
+
+```csharp
+// in the classifier:
+return lookup switch
+{
+    VehicleLookupResult.Found f      => /* use f.Vehicle */,
+    VehicleLookupResult.NotFound nf  => Reject(nf.Identifier),
+    VehicleLookupResult.Ambiguous a  => Reject(a.Identifier, a.Candidates),
+    VehicleLookupResult.Unavailable u => Fatal(u.Error),
+    _ => throw new InvalidOperationException()
+};
+```
+
+No null checks. The compiler tracks which arm gives access to which
+fields. The only remaining null story is **at the boundary**, where
+DTO records have nullable string fields because JSON might omit them
+(`string? VehicleId`, `string? UploadMode`). The mapper's job is to
+collapse those nulls into typed parse errors before the domain ever
+sees them.
+
+## F# — no null in F# types, `Option<'T>` for absence
+
+```fsharp
+[<RequireQualifiedAccess>]
+type VehicleLookupResult =
+    | Matched of Vehicle
+    | NotFound
+    | Ambiguous of Vehicle list
+    | Fatal of FatalProcessingError
+```
+
+F# records, unions, and tuples **cannot be null** as far as F# is
+concerned — assigning `null` to a value of an F# type is a compile
+error. Absence has a dedicated type: `Option<'T> = Some of 'T | None`.
+The classifier never sees `null`; it pattern-matches on a union or
+unwraps an `Option`.
+
+The exception, as ever, is `[<CLIMutable>]`:
+
+```fsharp
+[<CLIMutable>]
+type FuelUploadRowDto =
+    { VehicleKey: string
+      MerchantName: string
+      /* ... */ }
+```
+
+The CLR sees a parameterless constructor and writable string
+properties. A JSON deserialiser can produce a `FuelUploadRowDto`
+where `VehicleKey = null`. F#'s mapper has to *defend* the boundary
+with `String.IsNullOrWhiteSpace` checks — the only null-handling code
+in the engine. Once past `Interop.fs`, no F# value can be `null`
+again.
+
+This is also why `Option` is more visible at the boundary than
+inside the domain — the inside is null-free *by language*, but the
+boundary has to bridge between "the wire might be null" and "the
+domain is total."
+
+## Haskell — no null, `Maybe a` and `Either e a`
+
+```haskell
+-- haskell-fuel-engine/src/FuelUpload/Domain/Vehicle.hs
+data VehicleLookupResult
+  = VehicleFound Vehicle
+  | VehicleMissing Registration
+  | VehicleLookupFatal FatalError
+  deriving stock (Eq, Show)
+```
+
+Haskell has no `null`. The closest concept is `Maybe a = Nothing |
+Just a`, which is just an ADT like any other. There is no
+`[<CLIMutable>]` equivalent because there is no CLR to interop with;
+the boundary uses JSON libraries that parse straight into ADTs,
+producing `Maybe String` for optional fields rather than nullable
+strings.
+
+For lookups, "not found" is `VehicleMissing Registration` — a named
+constructor with the offending registration as payload. For
+operations that can fail, `Either e a` carries the error or the
+success. The repository boundary in V3 uses exactly this:
+
+```haskell
+newtype VehicleRepository = VehicleRepository
+  { repositoryLookupVehicle :: Registration -> Either VehicleRepositoryError VehicleLookupResult
+  }
+```
+
+`Either` is the same shape as `Result` in F#/Rust. Nothing here is
+`null`-shaped.
+
+## Rust — no null, `Option<T>` and `Result<T, E>`
+
+```rust
+// rust-fuel-engine/src/domain/vehicle.rs
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VehicleLookupResult {
+    Found(Vehicle),
+    NotFound { requested: VehicleRef },
+    Ambiguous { requested: VehicleRef, matches: Vec<VehicleId> },
+    Fatal(FatalError),
+}
+```
+
+Rust has no `null` and no implicit nullable references. Absence is
+`Option<T> = Some(T) | None`. Fallibility is `Result<T, E> = Ok(T) |
+Err(E)`. "Vehicle not found" is a named variant of
+`VehicleLookupResult` carrying the requested `VehicleRef` — the same
+shape as idiomatic C#.
+
+At the boundary, deserialisers produce `Option<String>` for fields
+that might be missing in the JSON. The mapper turns those into typed
+parse errors or `None` for genuinely-optional fields. The classifier
+never sees an `Option<Vehicle>` that means "vehicle missing"; if the
+vehicle is missing, the classifier sees `VehicleLookupResult::NotFound
+{ requested }`.
+
+## "Vehicle not found", lined up
+
+| Engine | How "vehicle not found" is modelled | What the consumer sees |
+|---|---|---|
+| normal C# | `Vehicle` property = `null`, `VehicleLookupStatus = "NotFound"`, `Status = "Rejected"`, error string in list | a mutable `RowDecision` with conventionally-null fields; compile-time null analysis off; debug-print bug strikes here |
+| idiomatic C# | `VehicleLookupResult.NotFound(VehicleIdentifier)` — typed sum-type case | exhaustive switch arm; NRT enforces no spurious null |
+| F# | `VehicleLookupResult.NotFound` — DU case with no payload | pattern match arm; `null` not assignable to the type |
+| Haskell | `VehicleMissing Registration` — ADT constructor with payload | case expression arm; `null` not a concept |
+| Rust | `VehicleLookupResult::NotFound { requested: VehicleRef }` — enum variant with named field | `match` arm; no null in the language |
+
+## Where nulls actually live in each engine
+
+Even in the engines that "have no null," there's a boundary story.
+
+```mermaid
+flowchart TB
+    subgraph normal["normal C#"]
+        n1[everywhere]
+    end
+    subgraph idiomatic["idiomatic C#"]
+        i1[only DTO `string?` fields]
+        i1 -.->|mapper| i2[domain: no null]
+    end
+    subgraph fsharp["F#"]
+        f1[CLIMutable DTO can be deserialised to null]
+        f1 -.->|Interop.fs| f2[domain: no null possible]
+    end
+    subgraph haskell["Haskell"]
+        h1[no null anywhere; Maybe at boundary]
+    end
+    subgraph rust["Rust"]
+        r1[no null anywhere; Option at boundary]
+    end
+```
+
+The shorter that bottom row, the cheaper your null-handling code.
+
+Normal C# pays everywhere. Idiomatic C# pays at the DTO. F# pays at
+`[<CLIMutable>]`. Haskell and Rust don't pay — `Maybe`/`Option` is
+the same mechanism throughout, with no special boundary syntax.
+
+The thing the ladder is really trading off here is **whether
+"missing" is a value or a hole**. In a hole-based system, every
+function has to ask "is this thing actually there?" In a value-based
+system, the type that *might* be missing names the missing case
+explicitly, and the function asks "which case is this?"
+
+The second question has an answer the compiler can check. The first
+one doesn't.
+
+For the journey version, see [chapter 4 — idiomatic
+C#](../part1/04-idiomatic-csharp.qmd) on NRT and the typed-absence
+trick, and [chapter 5 — F# native](../part1/05-fsharp-native.qmd)
+for the first language on the ladder where null genuinely cannot
+exist inside the domain.

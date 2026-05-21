@@ -1,0 +1,47 @@
+---
+title: "References"
+---
+
+# References and further reading {.unnumbered}
+
+## Source code
+
+All five fuel-upload engines live as sibling directories in this repository:
+
+- `normalcsharp-fuel-engine/` — the deliberately junior-to-mid C# baseline this book is written against.
+- `csharp-fuel-engine/` — idiomatic C# with sealed-record DUs, NRT, switch expressions, and a V3 boundary (CSV import, repository ports, audit, operational report).
+- `fsharp-fuel-engine/` — F# with native discriminated unions, exhaustive match, and a V3 `Interop.fs` boundary plus `Audit.fs` and `OperationalBatchReport.fs`.
+- `haskell-fuel-engine/` — Haskell with algebraic data types, `NonEmpty`, `Either`-based errors, and QuickCheck property tests.
+- `rust-fuel-engine/` — Rust with algebraic enums, exhaustive `match`, and `TryFrom`-style boundary conversion.
+
+Build and run instructions live in [Setup](setup.qmd).
+
+## Experiment docs (in `docs/`)
+
+- `docs/v2-experiment-plan.md` — the V2 round (idiomatic refactors, quarantined outcome, split recovery modes, DTO mapping).
+- `docs/v2-results.md` — V2 cross-language scoring.
+- `docs/v2-scoring-rubric.md` — what V2 graded on.
+- `docs/v3-experiment-plan.md` — the V3 round (integration pressure: CSV, repositories, audit, operational report).
+- `docs/v3-phase-briefing.md` — V3 phase-by-phase diagrams and rationale.
+- `docs/v3-results.md` — V3 cross-language scoring and verdicts.
+- `docs/v3-scoring-rubric.md` — what V3 graded on.
+- `docs/fsharp-learning-guide.md` — companion learning guide for the F# implementation (the V3 reference).
+- `docs/PROPERTY-TESTING.md` — notes on the QuickCheck / FsCheck setup.
+- `docs/agent-notes/` — per-phase agent decision logs for both V2 and V3.
+
+## External reading
+
+- Paul Graham, ["Beating the Averages"](http://www.paulgraham.com/avg.html) — the original blub-paradox essay.
+- Scott Wlaschin, *Domain Modeling Made Functional* — the canonical "design with types" book; the F# decision-engine in this repo is directly informed by it.
+- Matt Parsons, ["Type Safety Back and Forth"](https://www.parsonsmatt.org/2017/10/11/type_safety_back_and_forth.html) — about pushing partial functions out of the domain core.
+- Yaron Minsky, ["Effective ML"](https://blog.janestreet.com/effective-ml-revisited/) — "make illegal states unrepresentable" in OCaml; the same lesson applies to F# and Haskell.
+- Alexis King, ["Parse, Don't Validate"](https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/) — the boundary discipline that V3 stress-tests in this book.
+- *The Rust Programming Language* (the official book) — chapter 6 on enums and pattern matching maps directly onto the Rust engine's `RowDecision`.
+- Haskell *Real World Haskell* and *Haskell Programming from First Principles* — for the type-system primer this book skips.
+
+## How this book was built
+
+- Authored in [Quarto](https://quarto.org) using fenced Markdown plus Mermaid diagrams.
+- Source on GitHub: <https://github.com/tedk99/experiment-normalcsharp>.
+- Each chapter quotes real source verbatim from the five engines; nothing is invented.
+- The book is intentionally short and re-readable. If something is unclear, the engine source is the ground truth — open the file path in the snippet caption and read around it.

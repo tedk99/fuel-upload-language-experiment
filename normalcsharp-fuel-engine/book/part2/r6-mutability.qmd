@@ -1,0 +1,248 @@
+---
+title: "Mutability and identity"
+---
+
+## Where mutation lives {.unnumbered}
+
+A pure decision engine **should not** mutate domain values. The
+classifier is a function from input to output; it has no business
+reaching back into a row and rewriting fields. But "should not" is
+the social contract. What does the language enforce?
+
+The question is: starting from a fresh `RowDecision`, can a consumer
+*assign a field*? Can the engine itself mutate a list while building
+the answer? Where in the codebase is mutation actually expressed?
+
+## Normal C# — POCOs with public setters
+
+```csharp
+// normalcsharp-fuel-engine/src/FuelUploadEngine/Models/FuelRow.cs
+public class FuelRow
+{
+    public int RowNumber { get; set; }
+    public string VehicleRef { get; set; }
+    public string SourceId { get; set; }
+    public DateTime OccurredOn { get; set; }
+    public decimal QuantityLiters { get; set; }
+    public decimal TotalCost { get; set; }
+    public string MerchantName { get; set; }
+    public int Odometer { get; set; }
+}
+```
+
+Public `get; set;` on every field. The `RowDecision` class is the
+same — `RowNumber` and `Status` are even *fields*, not properties.
+Any caller can write:
+
+```csharp
+decision.Status = "Accepted";
+decision.Errors.Add("LateBindingFun");
+```
+
+Inside the service, the engine does exactly this — building up the
+decision by mutating a fresh instance:
+
+```csharp
+var decision = new RowDecision();
+decision.RowNumber = input.RowNumber;
+// ...
+decision.Status = "Rejected";
+decision.Errors.Add(vex.Message);
+```
+
+The lists are also mutable. `List<string> Warnings` is exposed
+directly; the caller could `.Clear()` it after the fact.
+
+What this means: mutation is the **default modelling tool**. There is
+no syntactic distance between "compute a value" and "assign a field
+on a partially-built record." The engine and its consumers share the
+same dialect.
+
+## Idiomatic C# — records with `init`, `IReadOnlyList<T>`
+
+```csharp
+public sealed record AcceptedTransaction(FuelTransaction Transaction) : RowDecision;
+
+public sealed record QuarantinedRow : RowDecision
+{
+    public RowNumber RowNumber { get; }       // get-only
+    public FuelTransaction Transaction { get; }
+    public IReadOnlyList<QuarantineReason> Reasons { get; }
+    public IReadOnlyList<UploadWarning> Warnings { get; }
+}
+```
+
+Positional record syntax compiles to `init`-only properties — set
+once in the constructor, immutable after that. Collections are
+exposed as `IReadOnlyList<T>`, which prevents the consumer from
+calling `.Add(...)` on the list **through that interface**. (The
+backing `List<T>` is still mutable; an `Unsafe`-style cast can find
+it, but the type signature says don't.)
+
+The engine constructs the decision once, from immutable arguments,
+and hands the value off. There is no `decision.Status = ...` step.
+Code that wants a "modified" decision must construct a new record:
+
+```csharp
+var withMoreWarnings = quarantined with { Warnings = newList };
+```
+
+The `with`-expression copies the record and lets you override
+specific fields, returning a new instance. This is the language
+admitting that immutable data needs an ergonomic update mechanism;
+you don't have to write the copy by hand.
+
+Cost: nothing in the type system stops you from declaring a record
+with a `set` instead of `init`, or from using `class` instead of
+`record`. Immutability in idiomatic C# is a **convention enforced by
+code review**, not by the language. It's strong enough to be
+load-bearing in this codebase, but it could be circumvented in a
+single PR by an unaware author.
+
+## F# — immutable by default, `[<CLIMutable>]` is the opt-out
+
+```fsharp
+type AcceptedTransaction =
+    { TransactionId: string
+      SourceRowNumber: int
+      Vehicle: Vehicle
+      OccurredAt: DateTimeOffset
+      OdometerMiles: decimal
+      FuelVolumeGallons: decimal
+      TotalCost: decimal
+      MerchantName: string
+      ExternalReference: string
+      Mode: UploadMode }
+```
+
+F# records are immutable. Period. You cannot write
+`tx.TransactionId <- "new"` — the language refuses. The way to
+"modify" is the copy-with-override:
+
+```fsharp
+let updated = { tx with MerchantName = "Updated Inc" }
+```
+
+This is the same idea as C#'s `with`-expression, but it's been the
+F# default since 2005 — not a feature retrofit. Lists are
+immutable too (`'a list` is a linked list of immutable cons cells);
+mutation is only available through explicit `ResizeArray<'T>` or
+`array` types, which the domain modules don't use.
+
+The one place mutation re-enters is `[<CLIMutable>]`:
+
+```fsharp
+[<CLIMutable>]
+type FuelUploadRowDto =
+    { RowNumber: int
+      VehicleKey: string
+      /* ... */ }
+```
+
+This attribute tells the compiler to *also emit* a parameterless
+constructor and writable setters in the IL. The F# code still sees an
+immutable record — you cannot assign through F# — but a C# consumer
+(or a JSON deserialiser) **can** instantiate it as a POCO and write
+to its fields. It's the only mutation seam in F# domain code, and
+it's there strictly for interop. See [the boundary](r4-boundary.qmd)
+and [null](r7-null.qmd) for what this opens up.
+
+## Haskell — immutable everywhere
+
+```haskell
+data FuelTransaction = FuelTransaction
+  { transactionId :: TransactionId
+  , transactionRowNumber :: RowNumber
+  , transactionVehicleId :: VehicleId
+  , transactionExternalRowId :: ExternalRowId
+  , transactionQuantity :: FuelQuantity
+  , transactionAmount :: MoneyAmount
+  , transactionOdometer :: OdometerReading
+  }
+  deriving stock (Eq, Show)
+```
+
+Haskell doesn't have mutation in the value language. `transaction
+{ transactionId = newId }` is record update syntax — it produces a
+new value. There is no `<-` for assignment outside `do`-notation in
+mutable monads (`IO`, `ST`, `STRef`), and the decision engine touches
+none of those.
+
+Lists, maps, trees — all persistent immutable structures by default.
+There is no `[<CLIMutable>]` equivalent because there is no .NET
+runtime to interop with. The whole domain layer is mutation-free by
+construction.
+
+The cost shows up in only one place — performance — and only for
+truly hot inner loops, which the classifier isn't. For a batch
+decision engine, "always immutable" is the right default and has
+zero ergonomic cost. The runtime's persistent data structures share
+structure between updates; a copy-with-override is O(log n) for
+typical containers, not O(n).
+
+## Rust — ownership; `&mut` is explicit and tracked
+
+```rust
+pub struct FuelTransaction {
+    pub transaction_id: TransactionId,
+    pub row_number: RowNumber,
+    pub source_id: SourceRowId,
+    pub vehicle_id: VehicleId,
+    pub occurred_on: FuelDate,
+    pub quantity_liters: f64,
+    pub total_cost: f64,
+    pub unit_cost: f64,
+    pub odometer: OdometerReading,
+    pub merchant: Merchant,
+}
+```
+
+Rust fields are public-by-name and writable — but only through an
+**owned binding** or an `&mut` reference. The borrow checker enforces
+that you can never have two writers, never have a writer while
+anyone else is reading, and never let a writable reference outlive
+the thing it points into. Mutation exists in the language; what's
+missing is *unconstrained* mutation.
+
+The engine uses `Vec<RowDecision>` internally and `push`es to it as
+it classifies — mutation, but local. The classifier function takes
+its inputs by reference (`&[RowInput]`) and produces an owned
+`BatchDecision`. Nobody outside the function sees the in-progress
+vector; the moment it's returned, the borrow checker hands ownership
+to the caller and the source can no longer touch it.
+
+```rust
+pub fn classify_batch(
+    rows: &[RowInput],
+    mode: UploadMode,
+    config: &ValidationConfig,
+) -> BatchDecision { /* mutate locally, return owned */ }
+```
+
+So Rust is "mutable where useful, immutable everywhere else, with the
+borrow checker policing the seam." Practically the engine's mutation
+is invisible to the caller. The contract is *as if* the function were
+pure.
+
+## The mutation gradient
+
+| Engine | Default mutability | Opt-in / opt-out | Where mutation lives in the engine |
+|---|---|---|---|
+| normal C# | mutable everything | n/a | service mutates the in-progress `RowDecision`, consumers may continue mutating |
+| idiomatic C# | immutable record by convention | `init` vs `set` is the dial | construction-time only, via `with`-expressions |
+| F# | immutable by default | `[<CLIMutable>]` for CLR interop | nowhere in the domain; only DTOs |
+| Haskell | no mutation in the value language | `IORef`/`STRef` exist; not used here | nowhere |
+| Rust | mutable by `let mut`, controlled by ownership | `&mut` references, borrow-checked | inside the classifier; invisible to caller |
+
+The shape that matters here is **where the consumer can write**.
+Normal C# lets the consumer write to a returned decision; nothing
+about the type prevents it. Every other engine on the ladder makes
+"a returned decision is final" a guarantee of the type — either by
+making mutation impossible (F#, Haskell), or by making mutation
+require an explicit borrow that the caller has to ask for (Rust), or
+by hiding the mutable list behind a read-only interface (idiomatic
+C#).
+
+That matters because the audit trail in this domain is the decision
+list itself. If a consumer can rewrite a `RowDecision` after the
+classifier returned it, the audit trail isn't.

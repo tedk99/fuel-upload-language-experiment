@@ -1,0 +1,263 @@
+---
+title: "The boundary"
+---
+
+## The DTO problem {.unnumbered}
+
+The domain types are the prize. They are precise, sum-typed,
+non-null, non-empty where it matters. They are also **useless on the
+wire**. JSON, CSV, SQL — none of them speak `RowDecision` or
+`PreviousUploadOutcome.FailedAfterCanonicalFinalization`. The
+boundary is where the domain type meets the wire type, and someone
+has to map one to the other.
+
+This chapter ties directly into [chapter 11 — boundary
+returns](../part1b/11-boundary-returns.qmd), where the V3 of the book
+explicitly adds CSV import and repository ports to push the boundary
+work harder.
+
+```mermaid
+flowchart LR
+    Wire["JSON / CSV (strings, nulls)"] --> Parse[Mapper]
+    Parse -- errors --> WireErr[Validation errors back to caller]
+    Parse -- success --> Domain[Sealed domain types]
+    Domain --> Engine[classifyBatch]
+    Engine --> Domain2[BatchDecision]
+    Domain2 --> Render[Mapper]
+    Render --> WireOut[Response DTO]
+```
+
+## Normal C# — DTOs are the domain
+
+```csharp
+// normalcsharp-fuel-engine/src/FuelUploadEngine/Dtos/FuelUploadRequestDto.cs
+public class FuelUploadRequestDto
+{
+    public string Mode { get; set; }
+    public decimal MaxQuantityLiters { get; set; }
+    public decimal MaxUnitCost { get; set; }
+    public List<FuelUploadRowDto> Rows { get; set; } = new List<FuelUploadRowDto>();
+}
+
+public class FuelUploadRowDto
+{
+    public int RowNumber { get; set; }
+    public FuelRow Row { get; set; }
+    public string VehicleLookupStatus { get; set; }   // "Found" | "NotFound" | "Ambiguous" | "Unavailable"
+    public Vehicle Vehicle { get; set; }
+    public string DuplicateStatus { get; set; }       // "NotDuplicate" | "Duplicate" | "Unavailable"
+    public string PreviousOutcome { get; set; }
+}
+```
+
+The DTO is also the input to the service. There is no separate
+domain `FuelRow` (the DTO contains one). There is no mapper layer —
+the service consumes DTOs directly. Status strings flow through
+unparsed; invalid `Mode` values become "UnknownMode" at the policy
+layer instead of a typed parse error at the boundary.
+
+The response DTO is the domain type:
+
+```csharp
+public class FuelUploadResponseDto
+{
+    public List<RowDecision> Decisions { get; set; }
+    public BatchSummary Summary { get; set; }
+}
+```
+
+`RowDecision` (the flat class from [r1](r1-decision.qmd)) is what
+goes over the wire. There is no separation between "domain answer"
+and "wire payload"; any field added to the domain is automatically
+public API.
+
+## Idiomatic C# — explicit mapper, typed map result
+
+```csharp
+// csharp-fuel-engine/src/FuelUploadEngine/Application/FuelUploadDtos.cs
+public sealed record FuelUploadRequestDto(
+    string? UploadMode,
+    decimal MaximumQuantity,
+    /* ... */
+    IReadOnlyList<FuelUploadRowDto>? Rows);
+
+public sealed record FuelUploadDecisionDto(
+    int? RowNumber,
+    string? SourceReference,
+    string Outcome,
+    /* lots of nullable fields */
+    string? FatalCode,
+    string? FatalDetail);
+
+public abstract record FuelUploadMapResult<T>
+{
+    private FuelUploadMapResult() { }
+    public sealed record Success(T Value) : FuelUploadMapResult<T>;
+    public sealed record Failure(IReadOnlyList<FuelUploadMappingError> Errors) : FuelUploadMapResult<T>;
+}
+```
+
+Two layers. DTOs are records with nullable string fields and explicit
+optionality. The mapper (`FuelUploadMapper.ToDomainRequest`) accumulates
+errors into a `List<FuelUploadMappingError>` and returns
+`FuelUploadMapResult<BatchClassificationRequest>` — a sealed-record
+sum type with `Success` and `Failure` arms. The application service
+short-circuits on `Failure`, runs the engine on `Success`, and maps
+back to a response DTO.
+
+```csharp
+public FuelUploadMapResult<FuelUploadResponseDto> Classify(FuelUploadRequestDto request)
+{
+    var mapped = FuelUploadMapper.ToDomainRequest(request);
+    if (mapped is FuelUploadMapResult<BatchClassificationRequest>.Failure failure)
+        return new FuelUploadMapResult<FuelUploadResponseDto>.Failure(failure.Errors);
+    /* ... */
+}
+```
+
+V3 adds `FuelUploadImportMapper` (raw CSV strings → DTO) and
+`RepositoryFuelUploadApplicationService` (DTO + vehicle/duplicate
+ports → enriched DTO → domain). Cleanest C# boundary in the book.
+Cost: a lot of code. The mapper is over 400 lines.
+
+## F# — `CLIMutable` records and `Result` pipelines
+
+```fsharp
+// fsharp-fuel-engine/FuelUpload.Domain/Interop.fs
+[<CLIMutable>]
+type FuelUploadRequestDto =
+    { UploadMode: string
+      RequireExternalReference: bool
+      MinFuelVolumeGallons: decimal
+      /* ... */
+      Rows: FuelUploadRowDto array }
+
+let private parseUploadMode field value : Result<UploadMode, FuelUploadMappingError list> =
+    match normalize value with
+    | "normal" -> Ok UploadMode.Normal
+    | "retry" -> Ok UploadMode.Retry
+    | "conservativerecovery" -> Ok UploadMode.ConservativeRecovery
+    | "aggressiverecovery" -> Ok UploadMode.AggressiveRecovery
+    | _ -> Error [ { Code = FuelUploadMappingErrorCode.InvalidUploadMode; Field = field; Detail = $"Unsupported upload mode '{value}'." } ]
+```
+
+F#'s mapper uses `Result<'T, FuelUploadMappingError list>` (the
+built-in result monad — `Success`/`Failure` for free) and pattern-matches
+on tuples of `Result` values to accumulate errors across many fields.
+The whole pipeline is `toDomainRequest >> Result.map classifyBatch
+>> Result.map toResponseDto`.
+
+The DTO records carry `[<CLIMutable>]` because the JSON serialiser
+needs parameterless constructors and writable setters. **That
+attribute is what makes F# DTOs awkward** — for a moment, the F#
+record stops being immutable-by-default and starts behaving like a C#
+POCO from the runtime's perspective. F# code can still treat them
+immutably, but a deserialiser will happily produce a `FuelUploadRowDto`
+with `VehicleKey = null`. F#'s null-safety story stops at this attribute.
+
+V3 also adds `ImportBatchRequest` (CSV strings) and
+`IVehicleRepository` / `IDuplicateRepository` ports. The repository
+versions return `Result<VehicleLookupResult, VehicleRepositoryError>`
+— same shape as the mapper.
+
+## Haskell — pure functions, no annotations
+
+```haskell
+-- haskell-fuel-engine/src/FuelUpload/Api.hs
+data FuelUploadRequestDto = FuelUploadRequestDto
+  { dtoUploadMode :: String
+  , dtoMaximumQuantity :: Rational
+  , dtoMaximumAmount :: Rational
+  /* ... */
+  , dtoRows :: [FuelUploadRowDto]
+  }
+  deriving stock (Eq, Show)
+
+toDomainRequest :: FuelUploadRequestDto -> Either [FuelUploadMappingError] DomainUploadRequest
+toDomainRequest dto =
+  case parseMode "uploadMode" (dtoUploadMode dto) of
+    Left modeErrors    -> Left (modeErrors <> rowErrors)
+    Right mode
+      | null rowErrors -> Right DomainUploadRequest { /* ... */ }
+      | otherwise      -> Left rowErrors
+  where
+    mappedRows = fmap (uncurry mapRow) (zip [0 :: Int ..] (dtoRows dto))
+    rowErrors  = concatMap errorsOf mappedRows
+    rows       = [row | Right row <- mappedRows]
+```
+
+`Either [FuelUploadMappingError] a` is Haskell's `Result`. The whole
+mapper is a tree of `Either` returns wired together with `<$>` and
+`<*>` (Applicative) or `do`-notation in the Monad. No nulls anywhere;
+absence in the DTO is `String` containing `""`, parsed into a typed
+error.
+
+V3 adds `ImportBatchRequest` (raw cells), `VehicleRepository`,
+`DuplicateRepository` — newtypes wrapping functions. The repository
+case threads `Either VehicleRepositoryError VehicleLookupResult`
+through the row mapper.
+
+Cost: Haskell's ecosystem story for HTTP/JSON is fine (`aeson`,
+`servant`) but adopting it inside a .NET shop is an integration
+project, not a one-day thing.
+
+## Rust — `TryFrom` and `From`
+
+```rust
+// rust-fuel-engine/src/boundary.rs
+impl TryFrom<&FuelUploadRequestDto> for FuelUploadDomainRequest {
+    type Error = Vec<FuelUploadMappingError>;
+
+    fn try_from(value: &FuelUploadRequestDto) -> Result<Self, Self::Error> {
+        let mode = parse_upload_mode(&value.upload_mode, "upload_mode");
+        let cost_rule = parse_cost_rule(&value.validation.cost_rule, "validation.cost_rule");
+        /* ... */
+        let errors: Vec<FuelUploadMappingError> = mode.as_ref().err().into_iter()
+            .chain(cost_rule.as_ref().err())
+            /* ... */
+            .flat_map(|errors| errors.iter().cloned())
+            .collect();
+        if !errors.is_empty() { return Err(errors); }
+        Ok(Self { /* ... */ })
+    }
+}
+
+impl From<&BatchDecision> for FuelUploadResponseDto {
+    fn from(value: &BatchDecision) -> Self { /* ... */ }
+}
+```
+
+Rust uses the standard library's `TryFrom` and `From` traits — one
+implementation per direction. The whole import pipeline is
+`TryFrom<&ImportBatchRequest> for FuelUploadRequestDto` followed by
+`TryFrom<&FuelUploadRequestDto> for FuelUploadDomainRequest`, then
+`From<&BatchDecision> for FuelUploadResponseDto`.
+
+V3 adds `VehicleRepository` and `DuplicateRepository` traits, and
+`RepositoryFuelUploadApplicationService` consumes references to them
+generically. Errors are `Result<_, Vec<...Error>>`. No nulls; absence
+is `Option`.
+
+## Tradeoffs
+
+| Engine | DTOs | Mapper return | Map errors | CSV import | Repositories |
+|---|---|---|---|---|---|
+| normal C# | mutable POCOs, **are** the domain | n/a | exceptions / null status | none | none |
+| idiomatic C# | `sealed record` with nullable fields | `FuelUploadMapResult<T>` (DU) | `IReadOnlyList<FuelUploadMappingError>` | `FuelUploadImportMapper` | `RepositoryPorts.cs` interfaces |
+| F# | `[<CLIMutable>]` record | `Result<'T, error list>` | `FuelUploadMappingError list` | `ImportBatchRequest` + `toApplicationRequest` | `IVehicleRepository`, `IDuplicateRepository` |
+| Haskell | plain record | `Either [error] a` | `[FuelUploadMappingError]` | `ImportBatchRequest` + `toFuelUploadRequestDto` | `VehicleRepository`, `DuplicateRepository` newtypes |
+| Rust | plain `struct` | `Result<T, Vec<...>>` via `TryFrom` | `Vec<FuelUploadMappingError>` | `TryFrom<&ImportBatchRequest>` | `VehicleRepository`, `DuplicateRepository` traits |
+
+The boundary is the place where the language differences hurt least:
+all four "real" engines do the same thing (parse to a sum type;
+return accumulated errors; map back to a DTO) with five different
+spellings. The real cost is **F#'s `CLIMutable`**, which is the only
+place outside normal-C# where null can leak into a value-typed
+language. Haskell and Rust have zero null exposure at the boundary;
+idiomatic C# has it everywhere because its DTOs are records with
+nullable strings.
+
+For the V3 narrative — why CSV import and repository ports were
+added, and what each engine had to do to absorb them — see
+[chapter 11](../part1b/11-boundary-returns.qmd) and the
+[side-by-side](../part1b/12-boundary-side-by-side.qmd).
