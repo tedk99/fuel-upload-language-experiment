@@ -1,0 +1,16 @@
+package:
+  name: fuel-engine
+  dependencies:
+    - arrays
+    - console
+    - effect
+    - exceptions
+    - foldable-traversable
+    - prelude
+  test:
+    main: Test.Main
+    dependencies: []
+workspace:
+  packageSet:
+    registry: 77.3.0
+  extraPackages: {}

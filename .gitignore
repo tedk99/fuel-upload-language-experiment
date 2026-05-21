@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+**/dist/
+**/dist-newstyle/
+**/node_modules/
+**/target/
+**/.spago/
+**/output/
+.DS_Store
+*.log

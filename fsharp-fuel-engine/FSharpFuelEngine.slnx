@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="FuelUpload.Engine.Tests/FuelUpload.Engine.Tests.fsproj" />
+  <Project Path="FuelUpload.Engine/FuelUpload.Engine.fsproj" />
+</Solution>
