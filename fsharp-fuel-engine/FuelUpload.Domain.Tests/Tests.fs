@@ -397,7 +397,7 @@ let ``fatal row blocks entire batch`` () =
         Assert.Equal<FatalProcessingError list>([ fatal ], fatalErrors)
     | other -> failwith $"Expected blocked batch, got %A{other}"
 
-let validDtoRow number =
+let validDtoRow number : FuelUploadRowDto =
     { RowNumber = number
       VehicleKey = $"truck-{number}"
       OccurredAt = "2026-05-20T12:00:00+00:00"
@@ -415,7 +415,7 @@ let validDtoRow number =
       PreviousAttempt = ""
       DuplicateError = "" }
 
-let validDtoRequest rows =
+let validDtoRequest rows : FuelUploadRequestDto =
     { UploadMode = "normal"
       RequireExternalReference = true
       MinFuelVolumeGallons = 0.01m
@@ -515,3 +515,116 @@ let ``response DTO uses domain summary without recomputing it`` () =
     Assert.Equal(42, response.AcceptedRows)
     Assert.Equal(6, response.QuarantinedRows)
     Assert.Equal(7, response.WarningCount)
+
+let validImportedRow number : ImportedFuelRow =
+    { RowNumber = string number
+      VehicleKey = $"truck-{number}"
+      OccurredAt = "2026-05-20T12:00:00+00:00"
+      OdometerMiles = string (12000 + number)
+      FuelVolumeGallons = "20"
+      TotalCost = "70"
+      MerchantName = "Depot Fuel"
+      ExternalReference = $"ext-{number}"
+      VehicleLookupStatus = "matched"
+      VehicleId = "veh-1"
+      VehicleRegistration = "REG-1"
+      AmbiguousVehicleIds = [||]
+      VehicleLookupError = ""
+      DuplicateStatus = "no_duplicate"
+      PreviousAttempt = ""
+      DuplicateError = "" }
+
+let validImportedRequest rows : ImportBatchRequest =
+    { UploadMode = "normal"
+      RequireExternalReference = "true"
+      MinFuelVolumeGallons = "0.01"
+      MaxFuelVolumeGallons = "80"
+      MinTotalCost = "0.01"
+      MaxTotalCost = "500"
+      AllowFutureTransactions = "false"
+      ProcessingDate = "2026-05-21T12:00:00+00:00"
+      HighFuelVolumeWarningGallons = "60"
+      HighCostPerGallonWarning = "9"
+      StaleTransactionWarningDays = "45"
+      SuspiciousFuelVolumeGallons = "33"
+      SuspiciousTotalCost = "99"
+      Rows = rows }
+
+[<Fact>]
+let ``valid imported row maps and classifies`` () =
+    match FuelUploadFacade().ClassifyImported(validImportedRequest [| validImportedRow 1 |]) with
+    | Ok response ->
+        Assert.Equal(1, response.TotalRows)
+        Assert.Equal(1, response.AcceptedRows)
+        Assert.Equal("accepted", response.Decisions[0].Outcome)
+    | Error errors -> failwith $"Expected imported row to classify, got %A{errors}"
+
+[<Fact>]
+let ``missing required imported cell returns typed import error`` () =
+    let request =
+        validImportedRequest
+            [| { validImportedRow 1 with
+                   VehicleKey = " " } |]
+
+    match FuelUploadInterop.toApplicationRequest request with
+    | Error errors ->
+        Assert.Contains(
+            errors,
+            fun error ->
+                error.Code = FuelImportErrorCode.MissingRequiredCell
+                && error.Field = "rows[0].vehicleKey"
+        )
+    | Ok _ -> failwith "Expected missing vehicle key import error"
+
+[<Fact>]
+let ``bad numeric imported value returns typed import error`` () =
+    let request =
+        validImportedRequest
+            [| { validImportedRow 1 with
+                   FuelVolumeGallons = "many" } |]
+
+    match FuelUploadInterop.toApplicationRequest request with
+    | Error errors ->
+        Assert.Contains(
+            errors,
+            fun error ->
+                error.Code = FuelImportErrorCode.InvalidNumber
+                && error.Field = "rows[0].fuelVolumeGallons"
+        )
+    | Ok _ -> failwith "Expected invalid numeric import error"
+
+[<Fact>]
+let ``unknown imported upload mode returns typed import error`` () =
+    let request = { validImportedRequest [| validImportedRow 1 |] with UploadMode = "eventual" }
+
+    match FuelUploadInterop.toApplicationRequest request with
+    | Error errors ->
+        Assert.Contains(
+            errors,
+            fun error ->
+                error.Code = FuelImportErrorCode.InvalidUploadMode
+                && error.Field = "uploadMode"
+        )
+    | Ok _ -> failwith "Expected invalid upload mode import error"
+
+[<Fact>]
+let ``quarantine still works through imported input`` () =
+    let request =
+        validImportedRequest
+            [| { validImportedRow 1 with
+                   MerchantName = "Manual fuel entry" } |]
+
+    match FuelUploadFacade().ClassifyImported request with
+    | Ok response ->
+        Assert.Equal(1, response.QuarantinedRows)
+        Assert.Equal("quarantined", response.Decisions[0].Outcome)
+    | Error errors -> failwith $"Expected imported row to classify, got %A{errors}"
+
+[<Fact>]
+let ``import mapper does not recompute summary independently`` () =
+    match FuelUploadFacade().ClassifyImported(validImportedRequest [| validImportedRow 1 |]) with
+    | Ok response ->
+        Assert.Equal(1, response.TotalRows)
+        Assert.Equal(1, response.AcceptedRows)
+        Assert.Equal(0, response.QuarantinedRows)
+    | Error errors -> failwith $"Expected imported row to classify, got %A{errors}"

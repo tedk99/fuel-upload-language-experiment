@@ -116,6 +116,72 @@ fn response_summary_uses_domain_summary_without_recomputing() {
     assert_eq!(response.warnings, 7);
 }
 
+#[test]
+fn valid_imported_row_maps_and_classifies() {
+    let response = FuelUploadImportMapper::classify(&valid_import_request()).unwrap();
+
+    assert_eq!(response.total_rows, 1);
+    assert_eq!(response.accepted, 1);
+    assert_eq!(response.decisions[0].outcome, "accepted");
+}
+
+#[test]
+fn missing_required_imported_cell_returns_typed_import_error() {
+    let mut request = valid_import_request();
+    request.rows[0].vehicle_ref = Some(" ".to_string());
+
+    let errors = FuelUploadImportMapper::to_application_request(&request).unwrap_err();
+
+    assert!(errors.iter().any(|error| {
+        error.code == FuelImportErrorCode::MissingRequiredCell
+            && error.field == "rows[0].vehicle_ref"
+    }));
+}
+
+#[test]
+fn bad_numeric_imported_value_returns_typed_import_error() {
+    let mut request = valid_import_request();
+    request.rows[0].quantity_liters = Some("many".to_string());
+
+    let errors = FuelUploadImportMapper::to_application_request(&request).unwrap_err();
+
+    assert!(errors.iter().any(|error| {
+        error.code == FuelImportErrorCode::InvalidNumber && error.field == "rows[0].quantity_liters"
+    }));
+}
+
+#[test]
+fn unknown_imported_upload_mode_returns_typed_import_error() {
+    let mut request = valid_import_request();
+    request.upload_mode = Some("eventual".to_string());
+
+    let errors = FuelUploadImportMapper::to_application_request(&request).unwrap_err();
+
+    assert!(errors.iter().any(|error| {
+        error.code == FuelImportErrorCode::InvalidUploadMode && error.field == "upload_mode"
+    }));
+}
+
+#[test]
+fn quarantine_still_works_through_imported_input() {
+    let mut request = valid_import_request();
+    request.rows[0].merchant = Some("Manual fuel entry".to_string());
+
+    let response = FuelUploadImportMapper::classify(&request).unwrap();
+
+    assert_eq!(response.quarantined, 1);
+    assert_eq!(response.decisions[0].outcome, "quarantined");
+}
+
+#[test]
+fn import_mapper_does_not_recompute_summary_independently() {
+    let response = FuelUploadImportMapper::classify(&valid_import_request()).unwrap();
+
+    assert_eq!(response.total_rows, 1);
+    assert_eq!(response.accepted, 1);
+    assert_eq!(response.uploadable_transactions, 1);
+}
+
 fn valid_request() -> FuelUploadRequestDto {
     FuelUploadRequestDto {
         upload_mode: "normal".to_string(),
@@ -128,6 +194,43 @@ fn valid_request() -> FuelUploadRequestDto {
             suspicious_total_cost: 333_333.0,
         },
         rows: vec![valid_row(1)],
+    }
+}
+
+fn valid_import_request() -> ImportBatchRequest {
+    ImportBatchRequest {
+        upload_mode: Some("normal".to_string()),
+        validation: ImportedFuelValidation {
+            cost_rule: Some("zero_or_positive".to_string()),
+            odometer_rule: Some("optional".to_string()),
+            large_quantity_warning: None,
+            high_unit_cost_warning: None,
+            suspicious_quantity: Some("333333".to_string()),
+            suspicious_total_cost: Some("333333".to_string()),
+        },
+        rows: vec![valid_raw_row(1)],
+    }
+}
+
+fn valid_raw_row(row_number: u32) -> RawFuelUploadRow {
+    RawFuelUploadRow {
+        row_number: Some(row_number.to_string()),
+        source_id: Some(format!("row-{row_number}")),
+        vehicle_ref: Some("truck-1".to_string()),
+        occurred_on: Some("2026-05-21".to_string()),
+        quantity_liters: Some("40".to_string()),
+        total_cost: Some("60".to_string()),
+        odometer: None,
+        merchant: Some("Depot".to_string()),
+        vehicle_lookup_status: Some("found".to_string()),
+        vehicle_id: Some("vehicle-1".to_string()),
+        ambiguous_vehicle_ids: Vec::new(),
+        vehicle_lookup_error: None,
+        duplicate_status: Some("unique".to_string()),
+        duplicate_state: None,
+        transaction_id: None,
+        attempt_id: None,
+        duplicate_error: None,
     }
 }
 

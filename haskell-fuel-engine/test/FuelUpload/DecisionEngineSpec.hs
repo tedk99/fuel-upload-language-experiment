@@ -333,6 +333,76 @@ main =
         Api.responseAccepted response `shouldBe` 42
         Api.responseQuarantined response `shouldBe` 4
 
+    describe "CSV-shaped import boundary" do
+      it "valid imported row maps and classifies" do
+        case Api.classifyImportBatch validImportRequest of
+          Right response -> do
+            Api.responseTotalRows response `shouldBe` 1
+            Api.responseAccepted response `shouldBe` 1
+            fmap Api.decisionOutcome (Api.responseDecisions response) `shouldBe` ["accepted"]
+          Left errors -> expectationFailure ("Expected import to classify, got " <> show errors)
+
+      it "missing required imported cell returns typed import error" do
+        let request =
+              validImportRequest
+                { Api.importRows =
+                    [ validRawRow {Api.importRegistration = " "} ]
+                }
+        Api.toFuelUploadRequestDto request
+          `shouldBe` Left
+            [ Api.FuelImportError
+                { Api.importErrorCode = Api.ImportMissingRequiredCell
+                , Api.importErrorField = "rows[0].registration"
+                , Api.importErrorDetail = "A non-empty cell is required."
+                }
+            ]
+
+      it "bad numeric imported value returns typed import error" do
+        let request =
+              validImportRequest
+                { Api.importRows =
+                    [ validRawRow {Api.importQuantity = "many"} ]
+                }
+        Api.toFuelUploadRequestDto request
+          `shouldBe` Left
+            [ Api.FuelImportError
+                { Api.importErrorCode = Api.ImportInvalidNumber
+                , Api.importErrorField = "rows[0].quantity"
+                , Api.importErrorDetail = "Cell must be a decimal number."
+                }
+            ]
+
+      it "unknown imported upload mode returns typed import error" do
+        let request = validImportRequest {Api.importUploadMode = "eventual"}
+        Api.toFuelUploadRequestDto request
+          `shouldBe` Left
+            [ Api.FuelImportError
+                { Api.importErrorCode = Api.ImportInvalidUploadMode
+                , Api.importErrorField = "uploadMode"
+                , Api.importErrorDetail = "Unsupported upload mode 'eventual'."
+                }
+            ]
+
+      it "quarantine still works through imported input" do
+        let request =
+              validImportRequest
+                { Api.importRows =
+                    [ validRawRow {Api.importMerchantName = "Manual fuel entry"} ]
+                }
+        case Api.classifyImportBatch request of
+          Right response -> do
+            Api.responseQuarantined response `shouldBe` 1
+            fmap Api.decisionOutcome (Api.responseDecisions response) `shouldBe` ["quarantined"]
+          Left errors -> expectationFailure ("Expected import to classify, got " <> show errors)
+
+      it "import mapper does not recompute summary independently" do
+        case Api.classifyImportBatch validImportRequest of
+          Right response -> do
+            Api.responseTotalRows response `shouldBe` 1
+            Api.responseAccepted response `shouldBe` 1
+            Api.responseQuarantined response `shouldBe` 0
+          Left errors -> expectationFailure ("Expected import to classify, got " <> show errors)
+
     propertySpec
 
 defaultConfig :: ValidationConfig
@@ -457,6 +527,41 @@ validDtoRequest =
     , Api.dtoSuspiciousQuantity = 33
     , Api.dtoSuspiciousAmount = 99
     , Api.dtoRows = [validDtoRow]
+    }
+
+validImportRequest :: Api.ImportBatchRequest
+validImportRequest =
+  Api.ImportBatchRequest
+    { Api.importUploadMode = "normal"
+    , Api.importMaximumQuantity = "100"
+    , Api.importMaximumAmount = "200"
+    , Api.importHighQuantityWarning = "60"
+    , Api.importHighAmountWarning = "100"
+    , Api.importHighOdometerWarning = "150000"
+    , Api.importSuspiciousQuantity = "33"
+    , Api.importSuspiciousAmount = "99"
+    , Api.importRows = [validRawRow]
+    }
+
+validRawRow :: Api.RawFuelUploadRow
+validRawRow =
+  Api.RawFuelUploadRow
+    { Api.importRowNumber = "1"
+    , Api.importTransactionDate = "2026-05-20"
+    , Api.importExternalRowId = "row-1"
+    , Api.importRegistration = "AB12 CDE"
+    , Api.importQuantity = "40"
+    , Api.importAmount = "80"
+    , Api.importOdometer = "42000"
+    , Api.importMerchantName = "Depot Fuel"
+    , Api.importVehicleLookupStatus = "found"
+    , Api.importVehicleId = "vehicle-1"
+    , Api.importVehicleLookupError = ""
+    , Api.importDuplicateStatus = "unique"
+    , Api.importPreviousTransactionId = ""
+    , Api.importCanonicalizationState = ""
+    , Api.importFinalizationState = ""
+    , Api.importDuplicateError = ""
     }
 
 validDtoRow :: Api.FuelUploadRowDto
